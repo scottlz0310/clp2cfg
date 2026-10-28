@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Target AST Merger と Safe Atomic Writer の実装
+  - 各 AI クライアント（Claude, Cursor, Codex, VS Code, プロジェクトローカル）設定パスの自動検出 (`detect_client_targets`)
+  - 既存設定 JSON の未知プロパティや既存構造を温存する差分マージ (`merge_mcp_servers`)
+  - Claude ターゲットに対する `type: "stdio"` 自動付与
+  - 同一ディレクトリ内の一時ファイル置換による安全なアトミック書き込み (`safe_atomic_write`)
+  - 既存設定変更前の `.bak` 自動バックアップ作成機能 (`create_backup_if_exists`)
+  - ターゲット検出・マージ・バックアップ・アトミック書き込みのユニットテスト（17件すべて通過）
 - Codecov によるテストカバレッジ計測の導入
   - カバレッジポリシー設定 (`codecov.yml`)
   - CI での `cargo llvm-cov` による LCOV レポート生成と Codecov アップロード
