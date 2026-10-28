@@ -1,0 +1,40 @@
+name: Prepare Release
+
+# リリース準備 PR（`chore(release): vX.Y.Z`）を作る。手動起動だけで動く。
+# release-automate が、Bot（GitHub App）名義で Cargo.toml / Cargo.lock のバージョン更新と
+# CHANGELOG.md の [Unreleased] をリリースの版の見出しに確定した PR を出す。
+# この PR を squash マージすると、release.yml が動く（タグ、draft Release、成果物の添付、公開）。
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_version:
+        description: "リリースする安定版（例: 0.1.0）。MAJOR.MINOR.PATCH の形式のみ"
+        required: true
+        type: string
+
+permissions: {}
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - name: 安定版の形式を確認
+        env:
+          TARGET_VERSION: ${{ inputs.target_version }}
+        run: |
+          if ! [[ "$TARGET_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::target_version は MAJOR.MINOR.PATCH の形式で指定してください（先頭に v は付けない）: $TARGET_VERSION"
+            exit 1
+          fi
+
+  prepare:
+    needs: validate
+    uses: scottlz0310/release-automate/.github/workflows/reusable-prepare-release.yml@fde6d796e366b4a70d73a992a48241c03f49ee68 # v3.1.0
+    secrets:
+      RELEASE_BOT_APP_ID: ${{ secrets.RELEASE_BOT_APP_ID }}
+      RELEASE_BOT_PRIVATE_KEY: ${{ secrets.RELEASE_BOT_PRIVATE_KEY }}
+    with:
+      target_version: ${{ inputs.target_version }}
+      bump_strategy: rust

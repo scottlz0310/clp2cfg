@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `release-automate` によるリリース自動化ワークフローの導入
+  - リリース準備ワークフロー (`.github/workflows/prepare-release.yml`): `reusable-prepare-release.yml`（`bump_strategy: rust`）によるバージョン更新と PR 生成
+  - リリース・配布ワークフロー (`.github/workflows/release.yml`): draft Release 作成、Windows (`x86_64-pc-windows-msvc`) および Linux (`x86_64-unknown-linux-gnu`) バイナリビルド、ZIP アーカイブおよび SHA256 チェックサム生成、asset 添付、Release 公開
+  - リリース asset 添付スクリプト (`scripts/attach-release-assets.sh`)
 - egui / eframe による 2-Pane GUI アプリケーションの実装 (`src/app.rs`)
   - OS クリップボードからの自動読み取り・ウィンドウフォーカス獲得時同期・手動読み取り・クリア機能
   - スニペット入力エリアとリアルタイム自動パース

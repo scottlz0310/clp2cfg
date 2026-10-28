@@ -1,0 +1,133 @@
+name: Release
+
+# main のリリースコミットから draft Release を作り、Windows / Linux の ZIP・checksum を
+# 添付して検証した後に公開する。PR では公開権限を使わずビルドと asset 構造だけを検証する。
+on:
+  push:
+    branches: [main]
+  pull_request:
+    paths:
+      - .github/workflows/release.yml
+      - scripts/attach-release-assets.sh
+      - Cargo.toml
+      - Cargo.lock
+
+permissions: {}
+
+jobs:
+  draft:
+    if: github.event_name == 'push'
+    uses: scottlz0310/release-automate/.github/workflows/reusable-publish-release.yml@fde6d796e366b4a70d73a992a48241c03f49ee68 # v3.1.0
+    permissions:
+      contents: write
+    with:
+      draft: true
+
+  build:
+    needs: draft
+    if: ${{ !cancelled() && (github.event_name == 'pull_request' || needs.draft.outputs.release_state == 'draft') }}
+    name: Build (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+    env:
+      TARGET_SHA: ${{ needs.draft.outputs.target_sha }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event_name == 'push' && format('refs/tags/{0}', needs.draft.outputs.tag_name) || '' }}
+          persist-credentials: false
+
+      - name: Verify tag points to release commit
+        if: github.event_name == 'push'
+        shell: bash
+        run: test "$(git rev-parse HEAD)" = "$TARGET_SHA"
+
+      - name: Install Linux system dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libxcb-render0-dev \
+            libxcb-shape0-dev \
+            libxcb-xfixes0-dev \
+            libxkbcommon-dev \
+            libssl-dev \
+            pkg-config
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - id: archive
+        uses: taiki-e/upload-rust-binary-action@v1
+        with:
+          bin: clp2cfg
+          target: ${{ matrix.target }}
+          ref: ${{ github.event_name == 'push' && format('refs/tags/{0}', needs.draft.outputs.tag_name) || '' }}
+          zip: all
+          tar: none
+          locked: true
+          dry-run: true
+          dry-run-intended: true
+
+      - name: Write checksum
+        shell: bash
+        env:
+          ARCHIVE: ${{ steps.archive.outputs.zip }}
+        run: |
+          mkdir dist
+          mv -- "$ARCHIVE" dist/
+          cd dist && sha256sum -b "$ARCHIVE" > "$ARCHIVE.sha256"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: dist-${{ matrix.target }}
+          path: dist/
+          if-no-files-found: error
+
+  attach:
+    needs: [draft, build]
+    if: needs.draft.outputs.release_state == 'draft'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      TAG: ${{ needs.draft.outputs.tag_name }}
+      TARGET_SHA: ${{ needs.draft.outputs.target_sha }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.draft.outputs.target_sha }}
+          persist-credentials: false
+
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: dist-*
+          path: assets
+          merge-multiple: true
+
+      - name: Attach assets to draft Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: sh scripts/attach-release-assets.sh "$TAG" "$TARGET_SHA" assets
+
+  finalize:
+    needs: [draft, attach]
+    if: ${{ !cancelled() && needs.draft.outputs.release_state == 'draft' && needs.attach.result == 'success' }}
+    uses: scottlz0310/release-automate/.github/workflows/reusable-finalize-release.yml@fde6d796e366b4a70d73a992a48241c03f49ee68 # v3.1.0
+    permissions:
+      contents: write
+    with:
+      tag_name: ${{ needs.draft.outputs.tag_name }}
+      target_sha: ${{ needs.draft.outputs.target_sha }}
