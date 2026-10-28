@@ -70,8 +70,9 @@ impl Clp2cfgApp {
         }
     }
 
-    /// eframe 用のコンストラクタ（起動時にクリップボード自動読み取りを試みる）
-    pub fn new(_cc: &eframe::CreationContext<'_>) -> Self {
+    /// eframe 用のコンストラクタ（起動時にフォント設定およびクリップボード自動読み取りを試みる）
+    pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
+        setup_system_fonts(&cc.egui_ctx);
         let mut app = Self::default();
         if app.auto_read_clipboard {
             app.read_from_clipboard();
@@ -489,6 +490,39 @@ impl eframe::App for Clp2cfgApp {
     }
 }
 
+/// OS 標準の日本語/CJKフォントを探索して egui のフォント定義に登録
+fn setup_system_fonts(ctx: &egui::Context) {
+    let mut fonts = egui::FontDefinitions::default();
+
+    let font_candidates = [
+        "C:\\Windows\\Fonts\\meiryo.ttc",
+        "C:\\Windows\\Fonts\\YuGothM.ttc",
+        "C:\\Windows\\Fonts\\msgothic.ttc",
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
+        "/System/Library/Fonts/PingFang.ttc",
+        "/System/Library/Fonts/Hiragino Sans GB.ttc",
+    ];
+
+    for path in font_candidates {
+        if let Ok(font_data) = std::fs::read(path) {
+            fonts.font_data.insert(
+                "cjk_fallback".to_owned(),
+                std::sync::Arc::new(egui::FontData::from_owned(font_data)),
+            );
+            if let Some(prop) = fonts.families.get_mut(&egui::FontFamily::Proportional) {
+                prop.push("cjk_fallback".to_owned());
+            }
+            if let Some(mono) = fonts.families.get_mut(&egui::FontFamily::Monospace) {
+                mono.push("cjk_fallback".to_owned());
+            }
+            break;
+        }
+    }
+
+    ctx.set_fonts(fonts);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -677,5 +711,11 @@ mod tests {
         let _ = ctx.run(Default::default(), |ctx| {
             app.render_ui(ctx);
         });
+    }
+
+    #[test]
+    fn test_setup_system_fonts_runs_without_panic() {
+        let ctx = egui::Context::default();
+        setup_system_fonts(&ctx);
     }
 }

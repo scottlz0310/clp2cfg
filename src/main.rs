@@ -1,3 +1,5 @@
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 use clp2cfg::app::Clp2cfgApp;
 
 fn main() -> eframe::Result<()> {

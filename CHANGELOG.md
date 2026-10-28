@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- GUI 上の日本語フォント文字化け（豆腐・□□□表示）の解消
+  - OS 標準の日本語/CJKフォント（Windows: Meiryo, Yu Gothic, MS Gothic / Linux: Noto Sans CJK / macOS: PingFang 等）を自動探索し egui フォントフォールバックに登録 (`setup_system_fonts`)
+- Windows リリースビルド時の不要なコンソールウィンドウのポップアップを防止 (`windows_subsystem = "windows"`)
+
 ### Added
 
 - `LICENSE-MIT` および `LICENSE-APACHE` をリポジトリルートに配置（`MIT OR Apache-2.0` デュアルライセンス全文の同梱）
