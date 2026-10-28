@@ -64,3 +64,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - `Cargo.toml` の `[dev-dependencies]` から重複していた `tempfile` を削除
+
+[Unreleased]: https://github.com/scottlz0310/clp2cfg/commits/main
