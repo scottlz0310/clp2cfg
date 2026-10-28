@@ -42,6 +42,8 @@ pub struct Clp2cfgApp {
     initial_clipboard_read: bool,
     /// 自動クリップボード読み取りトグル
     pub auto_read_clipboard: bool,
+    /// 前回フレームでのウィンドウフォーカス状態
+    pub was_focused: bool,
 }
 
 impl Default for Clp2cfgApp {
@@ -64,6 +66,7 @@ impl Clp2cfgApp {
             status_message: None,
             initial_clipboard_read: false,
             auto_read_clipboard: true,
+            was_focused: false,
         }
     }
 
@@ -246,10 +249,16 @@ impl Clp2cfgApp {
             ));
         }
     }
-}
 
-impl eframe::App for Clp2cfgApp {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+    /// egui Context を受け取り、画面 UI を構築・描画する
+    pub fn render_ui(&mut self, ctx: &egui::Context) {
+        // ウィンドウフォーカス獲得時の自動クリップボード同期
+        let is_focused = ctx.input(|i| i.focused);
+        if is_focused && !self.was_focused && self.auto_read_clipboard {
+            self.read_from_clipboard();
+        }
+        self.was_focused = is_focused;
+
         // トップバー
         egui::TopBottomPanel::top("top_panel").show(ctx, |ui| {
             ui.horizontal(|ui| {
@@ -474,6 +483,12 @@ impl eframe::App for Clp2cfgApp {
     }
 }
 
+impl eframe::App for Clp2cfgApp {
+    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.render_ui(ctx);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -633,5 +648,34 @@ mod tests {
 
         app.apply_all(false);
         assert!(app.status_message.as_ref().unwrap().1); // is_error = true
+    }
+
+    #[test]
+    fn test_app_render_ui_headless() {
+        let temp = tempdir().unwrap();
+        let target = make_test_target(temp.path(), ClientTargetKind::Claude, "claude.json");
+        let mut app = Clp2cfgApp::new_with_targets(vec![target]);
+        app.raw_input = r#"{"fetch": {"command": "npx", "args": ["fetch"]}}"#.to_string();
+        app.reparse();
+
+        let ctx = egui::Context::default();
+
+        // 1. 通常レンダリング（パース成功状態）
+        let _ = ctx.run(Default::default(), |ctx| {
+            app.render_ui(ctx);
+        });
+
+        // 2. パースエラー状態でのレンダリング
+        app.raw_input = "{ invalid json }".to_string();
+        app.reparse();
+        let _ = ctx.run(Default::default(), |ctx| {
+            app.render_ui(ctx);
+        });
+
+        // 3. エラーメッセージあり状態でのレンダリング
+        app.status_message = Some(("エラー発生".to_string(), true));
+        let _ = ctx.run(Default::default(), |ctx| {
+            app.render_ui(ctx);
+        });
     }
 }
