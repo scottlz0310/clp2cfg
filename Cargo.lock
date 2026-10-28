@@ -616,6 +616,7 @@ dependencies = [
 name = "clp2cfg"
 version = "0.1.0"
 dependencies = [
+ "arboard",
  "dirs",
  "eframe",
  "egui",

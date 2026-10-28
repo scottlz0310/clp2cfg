@@ -1,3 +1,4 @@
+pub mod app;
 pub mod filter;
 pub mod merger;
 pub mod model;

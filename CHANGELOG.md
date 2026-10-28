@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- egui / eframe による 2-Pane GUI アプリケーションの実装 (`src/app.rs`)
+  - OS クリップボードからの自動読み取り・手動読み取り・クリア機能
+  - スニペット入力エリアとリアルタイム自動パース
+  - `npx → bunx` 置換フィルタの GUI トグル
+  - パース結果プレビュー（認識サーバー一覧、コマンド、引数、環境変数）
+  - ターゲットクライアント一覧表示（既存/新規バッジ、選択チェックボックス）
+  - 選択ターゲットごとのマージ差分プレビュー表示
+  - 検証用 Dry-Run シミュレーション機能
+  - 選択ターゲットへのアトミック適用 (Apply) 機能
+  - アプリケーション状態遷移・パース・適用・エラーハンドリングのユニットテスト
+- コードビハインド・main.rs 肥大化防止のアーキテクチャラチェット制約テスト (`tests/architecture_test.rs`)
+  - `src/main.rs` の行数制限（80行以下）検査
+  - `src/main.rs` へのコア業務ロジックや直接ファイル I/O 直書き禁止キーワード検査
+- `src/main.rs` の薄いエントリポイント化（ロガー初期化、ウィンドウサイズ設定、`eframe::run_native` による `Clp2cfgApp` 起動配線のみ）
 - Target AST Merger と Safe Atomic Writer の実装
   - 各 AI クライアント（Claude, Cursor, Codex, VS Code, プロジェクトローカル）設定パスの自動検出 (`detect_client_targets`)
   - 既存設定 JSON の未知プロパティや既存構造を温存する差分マージ (`merge_mcp_servers`)
