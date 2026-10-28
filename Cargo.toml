@@ -1,6 +1,6 @@
 [package]
 name = "clp2cfg"
-version = "0.1.0"
+version = "0.0.0"
 edition = "2021"
 description = "Lightweight GUI tool to parse and merge MCP server config snippets into AI client configurations"
 license = "MIT OR Apache-2.0"
