@@ -30,14 +30,11 @@ pub fn apply_filters(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::BTreeMap;
 
     fn create_test_config(command: &str) -> NormalizedServerConfig {
-        NormalizedServerConfig {
-            command: command.to_string(),
-            args: vec!["arg1".to_string()],
-            env: BTreeMap::new(),
-        }
+        let mut config = NormalizedServerConfig::new(command);
+        config.args = vec!["arg1".to_string()];
+        config
     }
 
     #[test]

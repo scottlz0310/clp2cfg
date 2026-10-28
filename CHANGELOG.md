@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- コアデータモデルと Loose JSON Parser の実装
+  - `NormalizedServerConfig` への `extra` 拡張フィールド（未知プロパティ温存）対応
+  - Markdown コードブロック除去および JSON 候補抽出 (`extract_json_candidate`)
+  - 多様な MCP スニペット構造（`mcpServers` ラップ、`mcp` ラップ、単一サーバー定義、マップ形式）の正規化パース (`parse_mcp_snippet`)
+  - JSON5（コメント、末尾カンマ、クォート省略）のフォールバックパース対応
+  - 名前なし単一サーバー定義におけるサーバー名の自動推定 (`infer_server_name`)
+  - パーサーの各種入力パターン・エラーケースを網羅するユニットテスト
 - プロジェクト初期基盤の構築
   - Rust クレート構成 (`Cargo.toml`, `src/lib.rs`, `src/main.rs`)
   - コアモジュール構成の定義 (`model`, `parser`, `filter`, `merger`, `writer`)
