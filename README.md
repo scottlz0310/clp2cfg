@@ -16,6 +16,68 @@ Web サイトやドキュメントからコピーした任意の MCP (Model Cont
 - **コマンドフィルタ**: `npx` から `bunx` への自動最適化トグル対応
 - **高速・軽量**: Rust + `eframe` (`egui`) による単一バイナリ動作
 
+## インストール・入手方法
+
+### 1. パッケージマネージャー（推奨）
+
+Windows ではパッケージマネージャー経由でインストールすることで、環境変数 PATH の自動設定や、ブラウザダウンロード特有の **SmartScreen 警告（Mark-of-the-Web）を完全に回避** できます。
+
+#### Scoop
+
+```powershell
+# バケットを追加してインストール
+scoop bucket add scottlz0310 https://github.com/scottlz0310/scoop-bucket
+scoop install clp2cfg
+```
+
+#### winget (Windows Package Manager)
+
+```powershell
+winget install scottlz0310.clp2cfg
+```
+> [!NOTE]
+> winget-pkgs への登録・審査プロセスが完了するまでの間は、Scoop または以下のソースビルド / ZIP ダウンロードをご利用ください。
+
+### 2. ソースコードからビルド（SmartScreen 警告なし）
+
+Rust (Cargo) 開発環境がある場合、ローカルでビルド・インストールすることで改ざんの心配なく安全に利用できます。ローカルでコンパイルされたバイナリには Mark-of-the-Web (Zone.Identifier) が付与されないため、**SmartScreen 警告は一切発生しません**。
+
+```powershell
+# 1 コマンドで GitHub から直接インストール
+cargo install --git https://github.com/scottlz0310/clp2cfg
+
+# またはソースコードをクローンしてビルド
+git clone https://github.com/scottlz0310/clp2cfg.git
+cd clp2cfg
+cargo build --release
+# target/release/clp2cfg.exe が生成されます
+```
+
+### 3. ポータブル ZIP のダウンロード（単体実行）
+
+[GitHub Releases](https://github.com/scottlz0310/clp2cfg/releases) から最新の ZIP アーカイブ（Windows 用: `clp2cfg-x86_64-pc-windows-msvc.zip`、Linux 用: `clp2cfg-x86_64-unknown-linux-gnu.zip`）をダウンロードし、任意のフォルダに展開してそのまま実行できます。
+
+#### Windows Defender SmartScreen 警告について
+
+ブラウザ経由でダウンロードした未署名の実行可能ファイルには、Windows によって Mark-of-the-Web（外部ダウンロード識別情報）が付与されるため、初回起動時に青い画面で **「Windows によって PC が保護されました」** と表示される場合があります。
+
+以下のいずれかの方法で解除して実行できます：
+
+- **GUI で解除**:
+  「詳細情報」をクリック ➜ 表示される **「実行」** ボタンを押す。
+- **PowerShell で解除（推奨）**:
+  展開した `clp2cfg.exe` に対し以下のコマンドを実行すると、MotW 属性が解除されて警告が出なくなります：
+
+  ```powershell
+  Unblock-File .\clp2cfg.exe
+  ```
+- **完全性の検証（チェックサム照合）**:
+  ダウンロードしたバイナリが改ざんされていないか確認するには、Release に添付されている `SHA256SUMS.txt` と以下のハッシュ値を照合してください：
+
+  ```powershell
+  Get-FileHash .\clp2cfg.exe -Algorithm SHA256
+  ```
+
 ## 開発環境
 
 - **言語・ツールチェーン**:
