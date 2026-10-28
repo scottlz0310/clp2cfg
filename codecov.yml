@@ -1,0 +1,37 @@
+codecov:
+  require_ci_to_pass: yes
+  notify:
+    wait_for_ci: yes
+
+coverage:
+  precision: 2
+  round: down
+  range: "70...100"
+
+  status:
+    project:
+      default:
+        target: 80%
+        threshold: 2%
+        informational: false
+        if_ci_failed: error
+
+    patch:
+      default:
+        target: 80%
+        threshold: 5%
+        informational: false
+        if_ci_failed: error
+
+  ignore:
+    - "src/main.rs"
+
+comment:
+  layout: "reach,diff,flags,tree"
+  behavior: default
+  require_changes: false
+  require_base: no
+  require_head: yes
+
+github_checks:
+  annotations: true

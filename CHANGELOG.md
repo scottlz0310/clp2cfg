@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Codecov によるテストカバレッジ計測の導入
+  - カバレッジポリシー設定 (`codecov.yml`)
+  - CI での `cargo llvm-cov` による LCOV レポート生成と Codecov アップロード
+  - `rust-toolchain.toml` に `llvm-tools-preview` を追加
 - コアデータモデルと Loose JSON Parser の実装
   - `NormalizedServerConfig` への `extra` 拡張フィールド（未知プロパティ温存）対応
   - Markdown コードブロック除去および JSON 候補抽出 (`extract_json_candidate`)
