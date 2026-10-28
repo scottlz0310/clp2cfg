@@ -39,4 +39,7 @@ cargo test
 
 ## ライセンス
 
-MIT OR Apache-2.0
+本プロジェクトは以下のデュアルライセンスの下で公開されています：
+
+- [MIT License](LICENSE-MIT)
+- [Apache License 2.0](LICENSE-APACHE)
