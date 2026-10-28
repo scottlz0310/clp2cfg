@@ -26,3 +26,67 @@ pub fn apply_filters(
     }
     config
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::BTreeMap;
+
+    fn create_test_config(command: &str) -> NormalizedServerConfig {
+        NormalizedServerConfig {
+            command: command.to_string(),
+            args: vec!["arg1".to_string()],
+            env: BTreeMap::new(),
+        }
+    }
+
+    #[test]
+    fn test_apply_filters_command_replacement() {
+        struct TestCase {
+            name: &'static str,
+            input_command: &'static str,
+            replace_npx: bool,
+            expected_command: &'static str,
+        }
+
+        let cases = [
+            TestCase {
+                name: "npx is replaced with bunx when filter enabled",
+                input_command: "npx",
+                replace_npx: true,
+                expected_command: "bunx",
+            },
+            TestCase {
+                name: "npx is preserved when filter disabled",
+                input_command: "npx",
+                replace_npx: false,
+                expected_command: "npx",
+            },
+            TestCase {
+                name: "uvx command is preserved regardless of filter",
+                input_command: "uvx",
+                replace_npx: true,
+                expected_command: "uvx",
+            },
+            TestCase {
+                name: "node command is preserved regardless of filter",
+                input_command: "node",
+                replace_npx: true,
+                expected_command: "node",
+            },
+        ];
+
+        for case in cases {
+            let config = create_test_config(case.input_command);
+            let options = FilterOptions {
+                replace_npx_with_bunx: case.replace_npx,
+            };
+            let filtered = apply_filters(config, &options);
+            assert_eq!(
+                filtered.command, case.expected_command,
+                "Failed case: {}",
+                case.name
+            );
+        }
+    }
+}
