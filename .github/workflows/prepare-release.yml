@@ -33,7 +33,7 @@ jobs:
     needs: validate
     uses: scottlz0310/release-automate/.github/workflows/reusable-prepare-release.yml@7f53bc1716dc7da1740be166e55b5d94b33041e6 # v3.2.0
     secrets:
-      RELEASE_BOT_APP_ID: ${{ secrets.RELEASE_BOT_APP_ID }}
+      RELEASE_BOT_CLIENT_ID: ${{ secrets.RELEASE_BOT_CLIENT_ID }}
       RELEASE_BOT_PRIVATE_KEY: ${{ secrets.RELEASE_BOT_PRIVATE_KEY }}
     with:
       target_version: ${{ inputs.target_version }}
