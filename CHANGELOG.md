@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-10-28
+
 ### Fixed
 
 - GUI 上の日本語フォント文字化け（豆腐・□□□表示）の解消
@@ -65,4 +67,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `Cargo.toml` の `[dev-dependencies]` から重複していた `tempfile` を削除
 
-[Unreleased]: https://github.com/scottlz0310/clp2cfg/commits/main
+[Unreleased]: https://github.com/scottlz0310/clp2cfg/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/scottlz0310/clp2cfg/releases/tag/v0.1.0
