@@ -10,9 +10,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - README にインストール・入手方法および SmartScreen 対策ガイダンスを追加
-  - Scoop / winget によるパッケージマネージャー経由の導入方法
+  - Scoop / winget によるパッケージマネージャー経由の導入方法（`scottlz0310/scoop-bucket` 開通、`microsoft/winget-pkgs#464302` 提出中）
   - ソースコードからのビルド手順（`cargo install --git` / `cargo build --release` による SmartScreen 回避）
   - ポータブル ZIP 利用時の Windows Defender SmartScreen 解除手順（GUI / `Unblock-File`）および SHA-256 チェックサム照合方法
+- winget 配布用マニフェスト（v0.1.0）の追加 (`dist/winget/`)
 
 ## [0.1.0] - 2026-10-28
 

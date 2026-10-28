@@ -24,6 +24,8 @@ Windows ではパッケージマネージャー経由でインストールする
 
 #### Scoop
 
+個人バケットより即座にインストール・利用可能です：
+
 ```powershell
 # バケットを追加してインストール
 scoop bucket add scottlz0310 https://github.com/scottlz0310/scoop-bucket
@@ -32,11 +34,14 @@ scoop install clp2cfg
 
 #### winget (Windows Package Manager)
 
+現在 Microsoft 公式リポジトリへ登録申請中です（[microsoft/winget-pkgs#464302](https://github.com/microsoft/winget-pkgs/pull/464302)）。審査・自動パイプライン完了後に以下のコマンドで利用可能になります：
+
 ```powershell
 winget install scottlz0310.clp2cfg
 ```
+
 > [!NOTE]
-> winget-pkgs への登録・審査プロセスが完了するまでの間は、Scoop または以下のソースビルド / ZIP ダウンロードをご利用ください。
+> winget の審査・マージ完了までの間は、Scoop または以下のソースコードビルド / ポータブル ZIP をご利用ください。
 
 ### 2. ソースコードからビルド（SmartScreen 警告なし）
 
