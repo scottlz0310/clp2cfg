@@ -1,0 +1,21 @@
+# Rust
+/target/
+**/*.rs.bk
+
+# Node / Bun
+node_modules/
+bun.lockb
+# bun.lock (text format) is tracked
+
+# Temporary & backup files
+*.tmp
+*.bak
+*.swp
+*~
+
+# OS & Editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.local

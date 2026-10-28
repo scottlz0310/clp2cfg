@@ -1,0 +1,20 @@
+# Lefthook configuration
+# Refer to https://github.com/evilmartians/lefthook/blob/master/docs/configuration.md
+
+pre-commit:
+  parallel: true
+  commands:
+    biome:
+      glob: "*.{json,jsonc,md,yml,yaml}"
+      run: bunx biome check --no-errors-on-unmatched --files-ignore-unknown=true {staged_files}
+    rust-fmt:
+      glob: "*.rs"
+      run: cargo fmt --check
+    rust-clippy:
+      glob: "*.rs"
+      run: cargo clippy --all-targets -- -D warnings
+
+pre-push:
+  commands:
+    cargo-test:
+      run: cargo test

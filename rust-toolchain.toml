@@ -1,0 +1,5 @@
+# CI・リリース・ローカル開発で共通の Rust バージョン。Renovate が更新を追跡する。
+[toolchain]
+channel = "1.99.1"
+profile = "minimal"
+components = ["rustfmt", "clippy"]
