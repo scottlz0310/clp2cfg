@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- README への実機 UI スクリーンショットおよびステータスバッジ（CI, Codecov, Release, Scoop, License）の追加 (`assets/screenshot.png`)
+- コントリビューター向けガイドラインおよび PR テンプレートの追加 (`CONTRIBUTING.md`, `.github/PULL_REQUEST_TEMPLATE.md`)
 - 公式 MCP モノグラムをモチーフにしたアプリアイコンの追加
   - 透過 PNG および Windows 用マルチサイズ ICO の同梱 (`assets/icon.png`, `assets/icon.ico`)
   - `eframe` ウィンドウアイコン設定 (`load_app_icon`)

@@ -2,6 +2,18 @@
   <img src="assets/icon.png" width="160" height="160" alt="clp2cfg icon" />
   <h1>clp2cfg</h1>
   <p><strong>Clipboard to Config</strong> - MCP サーバー設定マネージャー</p>
+
+  <p>
+    <a href="https://github.com/scottlz0310/clp2cfg/actions/workflows/ci.yml"><img src="https://github.com/scottlz0310/clp2cfg/actions/workflows/ci.yml/badge.svg" alt="CI Status" /></a>
+    <a href="https://codecov.io/gh/scottlz0310/clp2cfg"><img src="https://codecov.io/gh/scottlz0310/clp2cfg/branch/main/graph/badge.svg" alt="Codecov" /></a>
+    <a href="https://github.com/scottlz0310/clp2cfg/releases"><img src="https://img.shields.io/github/v/release/scottlz0310/clp2cfg?color=blue" alt="Latest Release" /></a>
+    <a href="https://github.com/scottlz0310/scoop-bucket"><img src="https://img.shields.io/badge/Scoop-scottlz0310-blue?logo=powershell" alt="Scoop Bucket" /></a>
+    <a href="#ライセンス"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg" alt="License" /></a>
+  </p>
+
+  <p>
+    <img src="assets/screenshot.png" alt="clp2cfg screenshot" />
+  </p>
 </div>
 
 Web サイトやドキュメントからコピーした任意の MCP (Model Context Protocol) サーバー設定 JSON スニペットを自動解釈（正規化パース）し、ローカル環境の各 AI クライアントの設定ファイルへ安全に差分マージ（Upsert）する軽量デスクトップ GUI ツールです。
