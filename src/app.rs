@@ -251,17 +251,17 @@ impl Clp2cfgApp {
         }
     }
 
-    /// egui Context を受け取り、画面 UI を構築・描画する
-    pub fn render_ui(&mut self, ctx: &egui::Context) {
+    /// ルート Ui を受け取り、画面 UI を構築・描画する
+    pub fn render_ui(&mut self, ui: &mut egui::Ui) {
         // ウィンドウフォーカス獲得時の自動クリップボード同期
-        let is_focused = ctx.input(|i| i.focused);
+        let is_focused = ui.input(|i| i.focused);
         if is_focused && !self.was_focused && self.auto_read_clipboard {
             self.read_from_clipboard();
         }
         self.was_focused = is_focused;
 
         // トップバー
-        egui::TopBottomPanel::top("top_panel").show(ctx, |ui| {
+        egui::Panel::top("top_panel").show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.heading("clp2cfg");
                 ui.label(
@@ -294,7 +294,7 @@ impl Clp2cfgApp {
         });
 
         // ボトムバー（ステータス表示 & アクションボタン）
-        egui::TopBottomPanel::bottom("bottom_panel").show(ctx, |ui| {
+        egui::Panel::bottom("bottom_panel").show(ui, |ui| {
             ui.horizontal(|ui| {
                 // 左側: ステータスメッセージ
                 if let Some((msg, is_err)) = &self.status_message {
@@ -336,11 +336,11 @@ impl Clp2cfgApp {
         });
 
         // 左ペイン: 入力スニペット & パース概要
-        egui::SidePanel::left("left_pane")
+        egui::Panel::left("left_pane")
             .resizable(true)
-            .default_width(450.0)
-            .min_width(300.0)
-            .show(ctx, |ui| {
+            .default_size(450.0)
+            .min_size(300.0)
+            .show(ui, |ui| {
                 ui.heading("入力スニペット");
                 ui.label(
                     egui::RichText::new("JSON / Markdownコードブロックを貼り付け")
@@ -401,7 +401,7 @@ impl Clp2cfgApp {
             });
 
         // 右ペイン: ターゲットクライアント一覧 & 差分プレビュー
-        egui::CentralPanel::default().show(ctx, |ui| {
+        egui::CentralPanel::default().show(ui, |ui| {
             ui.heading("ターゲットクライアント");
             ui.label(
                 egui::RichText::new("設定ファイルを更新する対象を選択してください")
@@ -485,8 +485,8 @@ impl Clp2cfgApp {
 }
 
 impl eframe::App for Clp2cfgApp {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        self.render_ui(ctx);
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        self.render_ui(ui);
     }
 }
 
@@ -684,6 +684,12 @@ mod tests {
         assert!(app.status_message.as_ref().unwrap().1); // is_error = true
     }
 
+    /// 描画結果は検証しないため、egui 0.37 の未適用 TexturesDelta 検査を避けて破棄する
+    fn run_headless(ctx: &egui::Context, app: &mut Clp2cfgApp) {
+        let mut output = ctx.run_ui(Default::default(), |ui| app.render_ui(ui));
+        output.textures_delta.clear();
+    }
+
     #[test]
     fn test_app_render_ui_headless() {
         let temp = tempdir().unwrap();
@@ -695,22 +701,16 @@ mod tests {
         let ctx = egui::Context::default();
 
         // 1. 通常レンダリング（パース成功状態）
-        let _ = ctx.run(Default::default(), |ctx| {
-            app.render_ui(ctx);
-        });
+        run_headless(&ctx, &mut app);
 
         // 2. パースエラー状態でのレンダリング
         app.raw_input = "{ invalid json }".to_string();
         app.reparse();
-        let _ = ctx.run(Default::default(), |ctx| {
-            app.render_ui(ctx);
-        });
+        run_headless(&ctx, &mut app);
 
         // 3. エラーメッセージあり状態でのレンダリング
         app.status_message = Some(("エラー発生".to_string(), true));
-        let _ = ctx.run(Default::default(), |ctx| {
-            app.render_ui(ctx);
-        });
+        run_headless(&ctx, &mut app);
     }
 
     #[test]

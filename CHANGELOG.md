@@ -15,6 +15,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - ポータブル ZIP 利用時の Windows Defender SmartScreen 解除手順（GUI / `Unblock-File`）および SHA-256 チェックサム照合方法
 - winget 配布用マニフェスト（v0.1.0）の追加 (`dist/winget/`)
 
+### Changed
+
+- `eframe` / `egui` を 0.31.1 から 0.37.0 へ更新
+  - `egui::TopBottomPanel` / `egui::SidePanel` の `egui::Panel` への統合、`eframe::App::update` の `ui` への置き換え、`Context::run` の `run_ui` への置き換えに追従
+  - `Cargo.lock` に残っていた旧 `windows 0.58.0` を除去し、`wgpu-hal` と `gpu-allocator` の `windows` クレートを 0.62.2 に統一（Windows ビルドでの型不整合の解消）
+
 ## [0.1.0] - 2026-10-28
 
 ### Fixed
