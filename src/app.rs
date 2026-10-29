@@ -22,6 +22,9 @@ impl TargetEntry {
     }
 }
 
+/// Windows 等で並行テスト実行時に OLE/COM クリップボードの同時初期化によるヒープ破損を防ぐためのロック
+static CLIPBOARD_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// clp2cfg のメインアプリケーション状態
 pub struct Clp2cfgApp {
     /// 入力スニペット文字列
@@ -97,6 +100,7 @@ impl Clp2cfgApp {
 
     /// OS クリップボードの文字列を取得
     fn get_clipboard_text() -> Option<String> {
+        let _guard = CLIPBOARD_LOCK.lock().ok()?;
         let mut clipboard = arboard::Clipboard::new().ok()?;
         clipboard.get_text().ok()
     }
@@ -251,8 +255,47 @@ impl Clp2cfgApp {
         }
     }
 
+    /// キーボードショートカット操作を処理する (Esc, Ctrl+Enter, Ctrl+V)
+    pub fn handle_shortcuts(&mut self, ui: &mut egui::Ui) {
+        let esc_pressed = ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
+        let ctrl_enter_pressed = ui.input_mut(|i| {
+            i.consume_key(egui::Modifiers::COMMAND, egui::Key::Enter)
+                || i.consume_key(egui::Modifiers::CTRL, egui::Key::Enter)
+        });
+        let ctrl_v_pressed = ui.input_mut(|i| {
+            i.consume_key(egui::Modifiers::COMMAND, egui::Key::V)
+                || i.consume_key(egui::Modifiers::CTRL, egui::Key::V)
+        });
+
+        // Esc: ウィンドウを安全に閉じる
+        if esc_pressed {
+            ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+        }
+
+        // Ctrl+Enter: 選択ターゲットにマージを適用 (Apply)
+        if ctrl_enter_pressed {
+            let can_apply =
+                self.parsed_config.is_ok() && self.target_entries.iter().any(|e| e.target.selected);
+            if can_apply {
+                self.apply_all(false);
+            }
+        }
+
+        // Ctrl+V: テキスト入力ウィジェットにフォーカスがない場合にクリップボードから読み取り
+        // （テキスト入力中の通常の貼り付けは TextEdit 側で自動処理される）
+        if ctrl_v_pressed {
+            let has_text_focus = ui.memory(|m| m.focused().is_some());
+            if !has_text_focus {
+                self.read_from_clipboard();
+            }
+        }
+    }
+
     /// ルート Ui を受け取り、画面 UI を構築・描画する
     pub fn render_ui(&mut self, ui: &mut egui::Ui) {
+        // キーボードショートカットの処理
+        self.handle_shortcuts(ui);
+
         // ウィンドウフォーカス獲得時の自動クリップボード同期
         let is_focused = ui.input(|i| i.focused);
         if is_focused && !self.was_focused && self.auto_read_clipboard {
@@ -272,11 +315,19 @@ impl Clp2cfgApp {
 
                 ui.separator();
 
-                if ui.button("📋 クリップボードから読み取り").clicked() {
+                if ui
+                    .button("📋 読み取り (Ctrl+V)")
+                    .on_hover_text("クリップボードから設定スニペットを読み取ります (Ctrl+V)")
+                    .clicked()
+                {
                     self.read_from_clipboard();
                 }
 
-                if ui.button("🗑 クリア").clicked() {
+                if ui
+                    .button("🗑 クリア")
+                    .on_hover_text("入力欄をクリアします")
+                    .clicked()
+                {
                     self.raw_input.clear();
                     self.reparse();
                 }
@@ -316,10 +367,8 @@ impl Clp2cfgApp {
                         && self.target_entries.iter().any(|e| e.target.selected);
 
                     if ui
-                        .add_enabled(
-                            can_apply,
-                            egui::Button::new("💾 選択ターゲットに適用 (Apply)"),
-                        )
+                        .add_enabled(can_apply, egui::Button::new("💾 適用 (Ctrl+Enter)"))
+                        .on_hover_text("選択したターゲットにマージを適用します (Ctrl+Enter)")
                         .clicked()
                     {
                         self.apply_all(false);
@@ -327,10 +376,17 @@ impl Clp2cfgApp {
 
                     if ui
                         .add_enabled(can_apply, egui::Button::new("🔍 検証 (Dry-Run)"))
+                        .on_hover_text("ファイル書き込みを行わずにマージ結果を検証します")
                         .clicked()
                     {
                         self.apply_all(true);
                     }
+
+                    ui.label(
+                        egui::RichText::new("[Esc] 閉じる")
+                            .small()
+                            .color(egui::Color32::GRAY),
+                    );
                 });
             });
         });
@@ -748,5 +804,92 @@ mod tests {
         assert!(icon.width > 0);
         assert!(icon.height > 0);
         assert_eq!(icon.rgba.len(), (icon.width * icon.height * 4) as usize);
+    }
+
+    #[test]
+    fn test_handle_shortcuts_esc_closes_window() {
+        let temp = tempdir().unwrap();
+        let target = make_test_target(temp.path(), ClientTargetKind::Claude, "claude.json");
+        let mut app = Clp2cfgApp::new_with_targets(vec![target]);
+        let ctx = egui::Context::default();
+
+        let mut raw_input = egui::RawInput::default();
+        raw_input.events.push(egui::Event::Key {
+            key: egui::Key::Escape,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::default(),
+        });
+
+        let mut output = ctx.run_ui(raw_input, |ui| app.render_ui(ui));
+        output.textures_delta.clear();
+
+        let has_close_cmd = output.viewport_output.values().any(|vp| {
+            vp.commands
+                .iter()
+                .any(|cmd| matches!(cmd, egui::ViewportCommand::Close))
+        });
+        assert!(
+            has_close_cmd,
+            "Escape key should send ViewportCommand::Close"
+        );
+    }
+
+    #[test]
+    fn test_handle_shortcuts_ctrl_enter_applies() {
+        let temp = tempdir().unwrap();
+        let target = make_test_target(temp.path(), ClientTargetKind::Cursor, "mcp.json");
+        let mut app = Clp2cfgApp::new_with_targets(vec![target]);
+        app.auto_read_clipboard = false;
+        app.raw_input = r#"{"test": {"command": "echo"}}"#.to_string();
+        app.reparse();
+        app.target_entries[0].target.selected = true;
+
+        let ctx = egui::Context::default();
+        let mut raw_input = egui::RawInput::default();
+        let modifiers = egui::Modifiers {
+            ctrl: true,
+            ..Default::default()
+        };
+        raw_input.events.push(egui::Event::Key {
+            key: egui::Key::Enter,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers,
+        });
+
+        let mut output = ctx.run_ui(raw_input, |ui| app.render_ui(ui));
+        output.textures_delta.clear();
+
+        // 適用処理が実行され、ファイルが作成されたことを確認
+        assert!(app.target_entries[0].target.path.exists());
+        assert!(app.status_message.as_ref().unwrap().0.contains("適用完了"));
+    }
+
+    #[test]
+    fn test_handle_shortcuts_ctrl_v_when_not_focused() {
+        let temp = tempdir().unwrap();
+        let target = make_test_target(temp.path(), ClientTargetKind::Claude, "claude.json");
+        let mut app = Clp2cfgApp::new_with_targets(vec![target]);
+        let ctx = egui::Context::default();
+
+        let mut raw_input = egui::RawInput::default();
+        let modifiers = egui::Modifiers {
+            ctrl: true,
+            ..Default::default()
+        };
+        raw_input.events.push(egui::Event::Key {
+            key: egui::Key::V,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers,
+        });
+
+        // テキストボックスフォーカスなしでの描画実行でパニックせず完了することを確認
+        let mut output = ctx.run_ui(raw_input, |ui| app.render_ui(ui));
+        output.textures_delta.clear();
     }
 }
