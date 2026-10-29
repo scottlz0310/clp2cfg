@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- キーボードショートカット操作のサポート（`Ctrl+V`: クリップボード再読み取り、`Ctrl+Enter`: 適用、`Esc`: ウィンドウ閉じる）および UI ヒント表示の追加
 - README への実機 UI スクリーンショットおよびステータスバッジ（CI, Codecov, Release, Scoop, License）の追加 (`assets/screenshot.png`)
 - コントリビューター向けガイドラインおよび PR テンプレートの追加 (`CONTRIBUTING.md`, `.github/PULL_REQUEST_TEMPLATE.md`)
 - 公式 MCP モノグラムをモチーフにしたアプリアイコンの追加
