@@ -85,14 +85,14 @@ jobs:
         env:
           ARCHIVE: ${{ steps.archive.outputs.zip }}
         run: |
-          mkdir dist
-          mv -- "$ARCHIVE" dist/
-          cd dist && sha256sum -b "$ARCHIVE" > "$ARCHIVE.sha256"
+          mkdir release-assets
+          mv -- "$ARCHIVE" release-assets/
+          cd release-assets && sha256sum -b "$ARCHIVE" > "$ARCHIVE.sha256"
 
       - uses: actions/upload-artifact@v7
         with:
           name: dist-${{ matrix.target }}
-          path: dist/
+          path: release-assets/
           if-no-files-found: error
 
   attach:
@@ -113,14 +113,14 @@ jobs:
       - uses: actions/download-artifact@v8
         with:
           pattern: dist-*
-          path: assets
+          path: release-assets
           merge-multiple: true
 
       - name: Attach assets to draft Release
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-        run: sh scripts/attach-release-assets.sh "$TAG" "$TARGET_SHA" assets
+        run: sh scripts/attach-release-assets.sh "$TAG" "$TARGET_SHA" release-assets
 
   finalize:
     needs: [draft, attach]

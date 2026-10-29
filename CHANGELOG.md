@@ -15,6 +15,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - ポータブル ZIP 利用時の Windows Defender SmartScreen 解除手順（GUI / `Unblock-File`）および SHA-256 チェックサム照合方法
 - winget 配布用マニフェスト（v0.1.0）の追加 (`dist/winget/`)
 
+### Fixed
+
+- リリースワークフロー (`.github/workflows/release.yml`) の Build ジョブが `mkdir dist` の `File exists` で失敗する問題を修正
+  - リポジトリに `dist/winget/` が追加されたため、成果物の出力先を `release-assets/` に変更（`attach` ジョブの受け取り先も同名に統一し、将来の `assets/` 追加との衝突も回避）
+
 ## [0.1.0] - 2026-10-28
 
 ### Fixed
