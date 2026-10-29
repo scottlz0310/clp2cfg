@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- 公式 MCP モノグラムをモチーフにしたアプリアイコンの追加
+  - 透過 PNG および Windows 用マルチサイズ ICO の同梱 (`assets/icon.png`, `assets/icon.ico`)
+  - `eframe` ウィンドウアイコン設定 (`load_app_icon`)
+  - `winres` による Windows PE リソースへの実行ファイルアイコン埋め込み (`build.rs`)
 - README にインストール・入手方法および SmartScreen 対策ガイダンスを追加
   - Scoop / winget によるパッケージマネージャー経由の導入方法（`scottlz0310/scoop-bucket` 開通、`microsoft/winget-pkgs#464302` 提出中）
   - ソースコードからのビルド手順（`cargo install --git` / `cargo build --release` による SmartScreen 回避）

@@ -1,4 +1,4 @@
-# clp2cfg (Clipboard to Config)
+# <img src="assets/icon.png" width="32" height="32" alt="clp2cfg icon" valign="middle"> clp2cfg (Clipboard to Config)
 
 Web サイトやドキュメントからコピーした任意の MCP (Model Context Protocol) サーバー設定 JSON スニペットを自動解釈（正規化パース）し、ローカル環境の各 AI クライアントの設定ファイルへ安全に差分マージ（Upsert）する軽量デスクトップ GUI ツールです。
 

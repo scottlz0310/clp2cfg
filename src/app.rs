@@ -523,6 +523,27 @@ fn setup_system_fonts(ctx: &egui::Context) {
     ctx.set_fonts(fonts);
 }
 
+/// アプリケーションアイコン（`assets/icon.png`）を読み込み、`egui::IconData` を生成する。
+/// 読み込みに失敗した場合は警告ログを出力して `None` を返す。
+pub fn load_app_icon() -> Option<egui::IconData> {
+    const ICON_BYTES: &[u8] = include_bytes!("../assets/icon.png");
+    match image::load_from_memory(ICON_BYTES) {
+        Ok(image) => {
+            let rgba = image.to_rgba8();
+            let (width, height) = rgba.dimensions();
+            Some(egui::IconData {
+                rgba: rgba.into_raw(),
+                width,
+                height,
+            })
+        }
+        Err(err) => {
+            tracing::warn!("Failed to decode application icon: {err}");
+            None
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -717,5 +738,15 @@ mod tests {
     fn test_setup_system_fonts_runs_without_panic() {
         let ctx = egui::Context::default();
         setup_system_fonts(&ctx);
+    }
+
+    #[test]
+    fn test_load_app_icon_loads_valid_icon() {
+        let icon = load_app_icon();
+        assert!(icon.is_some(), "load_app_icon should succeed");
+        let icon = icon.unwrap();
+        assert!(icon.width > 0);
+        assert!(icon.height > 0);
+        assert_eq!(icon.rgba.len(), (icon.width * icon.height * 4) as usize);
     }
 }
