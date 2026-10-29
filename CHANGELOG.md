@@ -21,6 +21,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `egui::TopBottomPanel` / `egui::SidePanel` の `egui::Panel` への統合、`eframe::App::update` の `ui` への置き換え、`Context::run` の `run_ui` への置き換えに追従
   - `Cargo.lock` に残っていた旧 `windows 0.58.0` を除去し、`wgpu-hal` と `gpu-allocator` の `windows` クレートを 0.62.2 に統一（Windows ビルドでの型不整合の解消）
 
+### Fixed
+
+- リリースワークフロー (`.github/workflows/release.yml`) の Build ジョブが `mkdir dist` の `File exists` で失敗する問題を修正
+  - リポジトリに `dist/winget/` が追加されたため、成果物の出力先を `release-assets/` に変更（`attach` ジョブの受け取り先も同名に統一し、将来の `assets/` 追加との衝突も回避）
+
 ## [0.1.0] - 2026-10-28
 
 ### Fixed
