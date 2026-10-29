@@ -1,4 +1,8 @@
-# <img src="assets/icon.png" width="32" height="32" alt="clp2cfg icon" valign="middle"> clp2cfg (Clipboard to Config)
+<div align="center">
+  <img src="assets/icon.png" width="160" height="160" alt="clp2cfg icon" />
+  <h1>clp2cfg</h1>
+  <p><strong>Clipboard to Config</strong> - MCP サーバー設定マネージャー</p>
+</div>
 
 Web サイトやドキュメントからコピーした任意の MCP (Model Context Protocol) サーバー設定 JSON スニペットを自動解釈（正規化パース）し、ローカル環境の各 AI クライアントの設定ファイルへ安全に差分マージ（Upsert）する軽量デスクトップ GUI ツールです。
 
