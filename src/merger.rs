@@ -3,7 +3,19 @@
 use crate::cli::find_in_path;
 use crate::model::{ClientTarget, ClientTargetKind, McpServersMap, MergeError};
 use serde_json::{Map, Value};
+use std::collections::BTreeMap;
 use std::path::Path;
+
+/// How a server in the snippet relates to what the target file already contains.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ServerChange {
+    /// No server with this name exists yet.
+    New,
+    /// A server with this name exists and its definition would be replaced.
+    Updated,
+    /// A server with this name exists and already has exactly this definition.
+    Unchanged,
+}
 
 /// Detect standard client configuration targets on the host system.
 pub fn detect_client_targets(project_dir: Option<&Path>) -> Vec<ClientTarget> {
@@ -135,6 +147,80 @@ fn parse_existing(kind: ClientTargetKind, content: &str) -> Result<Value, MergeE
     }
 }
 
+/// The JSON key that holds the MCP servers for a file target.
+fn servers_key(kind: ClientTargetKind) -> Result<&'static str, MergeError> {
+    match kind {
+        ClientTargetKind::Claude
+        | ClientTargetKind::Cursor
+        | ClientTargetKind::Project
+        | ClientTargetKind::Windsurf
+        | ClientTargetKind::Cline
+        | ClientTargetKind::RooCode => Ok("mcpServers"),
+        ClientTargetKind::VsCode => Ok("github.copilot.chat.mcp"),
+        ClientTargetKind::Zed => Ok("context_servers"),
+        ClientTargetKind::ClaudeCli
+        | ClientTargetKind::CodexCli
+        | ClientTargetKind::CopilotCli
+        | ClientTargetKind::AntigravityCli => Err(MergeError::NotFileTarget),
+    }
+}
+
+/// The JSON value written for one server (shared by merging and change detection so they agree).
+fn server_value(
+    kind: ClientTargetKind,
+    config: &crate::model::NormalizedServerConfig,
+) -> Result<Value, MergeError> {
+    let mut server_val =
+        serde_json::to_value(config).map_err(|e| MergeError::SerializationFailed(e.to_string()))?;
+
+    // Claude requires/prefers "type": "stdio"
+    if kind == ClientTargetKind::Claude {
+        if let Some(obj) = server_val.as_object_mut() {
+            if !obj.contains_key("type") {
+                obj.insert("type".to_string(), Value::String("stdio".to_string()));
+            }
+        }
+    }
+    Ok(server_val)
+}
+
+/// Classify each server in `servers` against the target's existing file content.
+pub fn classify_server_changes(
+    kind: ClientTargetKind,
+    existing_json: Option<&str>,
+    servers: &McpServersMap,
+) -> Result<BTreeMap<String, ServerChange>, MergeError> {
+    let target_key = servers_key(kind)?;
+    let root: Value = match existing_json {
+        Some(content) if !content.trim().is_empty() => parse_existing(kind, content)?,
+        _ => Value::Object(Map::new()),
+    };
+    let root_map = root.as_object().ok_or(MergeError::RootNotObject)?;
+    let existing_servers = match root_map.get(target_key) {
+        None => None,
+        Some(value) => Some(value.as_object().ok_or_else(|| {
+            MergeError::InvalidExistingJson(format!(
+                "'{}' field exists but is not an object",
+                target_key
+            ))
+        })?),
+    };
+
+    servers
+        .iter()
+        .map(|(name, config)| {
+            let change = match existing_servers.and_then(|m| m.get(name)) {
+                None => ServerChange::New,
+                Some(existing) if *existing == server_value(kind, config)? => {
+                    ServerChange::Unchanged
+                }
+                Some(_) => ServerChange::Updated,
+            };
+            Ok((name.clone(), change))
+        })
+        .collect()
+}
+
 /// Merges MCP servers into an existing configuration JSON according to target semantics.
 pub fn merge_mcp_servers(
     kind: ClientTargetKind,
@@ -150,20 +236,7 @@ pub fn merge_mcp_servers(
     let root_map = root.as_object_mut().ok_or(MergeError::RootNotObject)?;
 
     // 2. Select the key path according to client target
-    let target_key = match kind {
-        ClientTargetKind::Claude
-        | ClientTargetKind::Cursor
-        | ClientTargetKind::Project
-        | ClientTargetKind::Windsurf
-        | ClientTargetKind::Cline
-        | ClientTargetKind::RooCode => "mcpServers",
-        ClientTargetKind::VsCode => "github.copilot.chat.mcp",
-        ClientTargetKind::Zed => "context_servers",
-        ClientTargetKind::ClaudeCli
-        | ClientTargetKind::CodexCli
-        | ClientTargetKind::CopilotCli
-        | ClientTargetKind::AntigravityCli => return Err(MergeError::NotFileTarget),
-    };
+    let target_key = servers_key(kind)?;
 
     // Ensure the container object exists
     if !root_map.contains_key(target_key) {
@@ -182,19 +255,7 @@ pub fn merge_mcp_servers(
 
     // 3. Upsert each server
     for (name, config) in servers {
-        let mut server_val = serde_json::to_value(config)
-            .map_err(|e| MergeError::SerializationFailed(e.to_string()))?;
-
-        // Claude requires/prefers "type": "stdio"
-        if kind == ClientTargetKind::Claude {
-            if let Some(obj) = server_val.as_object_mut() {
-                if !obj.contains_key("type") {
-                    obj.insert("type".to_string(), Value::String("stdio".to_string()));
-                }
-            }
-        }
-
-        servers_container.insert(name.clone(), server_val);
+        servers_container.insert(name.clone(), server_value(kind, config)?);
     }
 
     // 4. Serialize with pretty printing (2 spaces)
@@ -361,5 +422,125 @@ mod tests {
     fn test_detect_targets_non_empty() {
         let targets = detect_client_targets(None);
         assert!(!targets.is_empty());
+    }
+
+    #[test]
+    fn test_classify_server_changes() {
+        struct Case {
+            name: &'static str,
+            kind: ClientTargetKind,
+            existing: Option<&'static str>,
+            expected: &'static [(&'static str, ServerChange)],
+        }
+
+        // snippet 側: a = node run, b = uvx run
+        let mut servers = McpServersMap::new();
+        servers.insert("a".to_string(), create_dummy_server("node"));
+        servers.insert("b".to_string(), create_dummy_server("uvx"));
+
+        let cases = [
+            Case {
+                name: "no existing file: everything is new",
+                kind: ClientTargetKind::Cursor,
+                existing: None,
+                expected: &[("a", ServerChange::New), ("b", ServerChange::New)],
+            },
+            Case {
+                name: "empty file: everything is new",
+                kind: ClientTargetKind::Cursor,
+                existing: Some("  "),
+                expected: &[("a", ServerChange::New), ("b", ServerChange::New)],
+            },
+            Case {
+                name: "file without the servers key: everything is new",
+                kind: ClientTargetKind::Cursor,
+                existing: Some(r#"{"theme":"dark"}"#),
+                expected: &[("a", ServerChange::New), ("b", ServerChange::New)],
+            },
+            Case {
+                name: "identical definition is unchanged, different one is updated",
+                kind: ClientTargetKind::Cursor,
+                existing: Some(
+                    r#"{"mcpServers":{"a":{"command":"node","args":["run"]},"b":{"command":"old"}}}"#,
+                ),
+                expected: &[("a", ServerChange::Unchanged), ("b", ServerChange::Updated)],
+            },
+            Case {
+                name: "extra fields in the existing server count as updated (they would be dropped)",
+                kind: ClientTargetKind::Cursor,
+                existing: Some(
+                    r#"{"mcpServers":{"a":{"command":"node","args":["run"],"disabled":true}}}"#,
+                ),
+                expected: &[("a", ServerChange::Updated), ("b", ServerChange::New)],
+            },
+            Case {
+                name: "claude: type stdio is part of the written value",
+                kind: ClientTargetKind::Claude,
+                existing: Some(
+                    r#"{"mcpServers":{"a":{"command":"node","args":["run"],"type":"stdio"}}}"#,
+                ),
+                expected: &[("a", ServerChange::Unchanged), ("b", ServerChange::New)],
+            },
+            Case {
+                name: "claude: existing without type differs from what would be written",
+                kind: ClientTargetKind::Claude,
+                existing: Some(r#"{"mcpServers":{"a":{"command":"node","args":["run"]}}}"#),
+                expected: &[("a", ServerChange::Updated), ("b", ServerChange::New)],
+            },
+            Case {
+                name: "vscode uses its own key",
+                kind: ClientTargetKind::VsCode,
+                existing: Some(
+                    r#"{"github.copilot.chat.mcp":{"b":{"command":"uvx","args":["run"]}}}"#,
+                ),
+                expected: &[("a", ServerChange::New), ("b", ServerChange::Unchanged)],
+            },
+            Case {
+                name: "zed jsonc existing file",
+                kind: ClientTargetKind::Zed,
+                existing: Some(
+                    "{\n  // comment\n  \"context_servers\": {\"a\": {\"command\": \"node\", \"args\": [\"run\"],}},\n}",
+                ),
+                expected: &[("a", ServerChange::Unchanged), ("b", ServerChange::New)],
+            },
+        ];
+
+        for case in cases {
+            let changes = classify_server_changes(case.kind, case.existing, &servers)
+                .unwrap_or_else(|e| panic!("{}: {e}", case.name));
+            let expected: BTreeMap<String, ServerChange> = case
+                .expected
+                .iter()
+                .map(|(n, c)| (n.to_string(), *c))
+                .collect();
+            assert_eq!(changes, expected, "{}", case.name);
+        }
+    }
+
+    #[test]
+    fn test_classify_server_changes_errors() {
+        let mut servers = McpServersMap::new();
+        servers.insert("a".to_string(), create_dummy_server("node"));
+
+        assert!(matches!(
+            classify_server_changes(ClientTargetKind::Cursor, Some("{ not json"), &servers),
+            Err(MergeError::InvalidExistingJson(_))
+        ));
+        assert!(matches!(
+            classify_server_changes(ClientTargetKind::Cursor, Some("[]"), &servers),
+            Err(MergeError::RootNotObject)
+        ));
+        assert!(matches!(
+            classify_server_changes(
+                ClientTargetKind::Cursor,
+                Some(r#"{"mcpServers":[]}"#),
+                &servers
+            ),
+            Err(MergeError::InvalidExistingJson(_))
+        ));
+        assert!(matches!(
+            classify_server_changes(ClientTargetKind::ClaudeCli, None, &servers),
+            Err(MergeError::NotFileTarget)
+        ));
     }
 }
