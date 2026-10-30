@@ -43,10 +43,34 @@ pub fn parse_mcp_snippet(input: &str) -> Result<McpServersMap, ParseError> {
 
     // Parse with serde_json first, fallback to json5
     let value: Value = serde_json::from_str(candidate).or_else(|_| {
-        json5::from_str(candidate).map_err(|e| ParseError::SyntaxError(e.to_string()))
+        json5::from_str(candidate).map_err(|e| ParseError::SyntaxError(describe_json5_error(&e)))
     })?;
 
     normalize_parsed_value(value)
+}
+
+/// json5 のエラー文には入力の抜粋が含まれ得るため、種別と位置だけを返す。
+/// 入力の値（API キー等）を、画面・標準エラー・ログへ残さないため。
+fn describe_json5_error(e: &json5::Error) -> String {
+    let location = e.position().map(|p| format!(" at {p}")).unwrap_or_default();
+    match e.code() {
+        Some(code) => format!("{code}{location}"),
+        None => format!("invalid JSON5{location}"),
+    }
+}
+
+/// serde のデータエラーは入力値（`invalid type: integer `123``）を含むため、値を含まない説明に置き換える。
+/// 欠落フィールド名（構造体側の固定名）だけは、そのまま伝える。
+fn describe_config_error(e: &serde_json::Error) -> String {
+    let message = e.to_string();
+    match message.strip_prefix("missing field ") {
+        Some(rest) => format!(
+            "missing field {}",
+            rest.split(" at line ").next().unwrap_or(rest)
+        ),
+        None => "invalid field type (command must be a string, args an array of strings, env a map of strings)"
+            .to_string(),
+    }
 }
 
 /// Normalizes various JSON AST structures into an McpServersMap.
@@ -74,7 +98,10 @@ fn normalize_parsed_value(value: Value) -> Result<McpServersMap, ParseError> {
     if obj.contains_key("command") {
         let config: NormalizedServerConfig =
             serde_json::from_value(Value::Object(obj)).map_err(|e| {
-                ParseError::InvalidFormat(format!("Failed to parse server config: {}", e))
+                ParseError::InvalidFormat(format!(
+                    "Failed to parse server config: {}",
+                    describe_config_error(&e)
+                ))
             })?;
         let name = infer_server_name(&config);
         let mut map = McpServersMap::new();
@@ -103,7 +130,8 @@ fn parse_servers_object(val: &Value) -> Result<McpServersMap, ParseError> {
             serde_json::from_value(server_val.clone()).map_err(|e| {
                 ParseError::InvalidFormat(format!(
                     "Server '{}' is not a valid server config: {}",
-                    name, e
+                    name,
+                    describe_config_error(&e)
                 ))
             })?;
         result.insert(name.clone(), config);
@@ -318,5 +346,55 @@ mod tests {
             parse_mcp_snippet("{ invalid: }"),
             Err(ParseError::SyntaxError(_))
         ));
+    }
+
+    #[test]
+    fn test_parse_errors_never_contain_input_values() {
+        struct Case {
+            name: &'static str,
+            input: &'static str,
+            secret: &'static str,
+            /// エラー文に残っていてほしい手がかり
+            hint: &'static str,
+        }
+
+        let cases = [
+            Case {
+                name: "unquoted number as env value (map of servers)",
+                input: r#"{"srv":{"command":"node","env":{"TOKEN":123456789}}}"#,
+                secret: "123456789",
+                hint: "invalid field type",
+            },
+            Case {
+                name: "unquoted number as env value (single server)",
+                input: r#"{"command":"node","env":{"TOKEN":987654321}}"#,
+                secret: "987654321",
+                hint: "invalid field type",
+            },
+            Case {
+                name: "string where an args array is expected",
+                input: r#"{"srv":{"command":"node","args":"sk-secret-args"}}"#,
+                secret: "sk-secret-args",
+                hint: "invalid field type",
+            },
+            Case {
+                name: "missing command keeps only the field name",
+                input: r#"{"srv":{"args":["sk-secret-args"]}}"#,
+                secret: "sk-secret-args",
+                hint: "missing field `command`",
+            },
+            Case {
+                name: "json5 syntax error does not echo the source line",
+                input: "{srv: {command: 'node', env: {TOKEN: 'sk-secret-xyz' oops}}}",
+                secret: "sk-secret-xyz",
+                hint: "line 1",
+            },
+        ];
+
+        for case in cases {
+            let err = parse_mcp_snippet(case.input).unwrap_err().to_string();
+            assert!(!err.contains(case.secret), "{}: {err}", case.name);
+            assert!(err.contains(case.hint), "{}: {err}", case.name);
+        }
     }
 }

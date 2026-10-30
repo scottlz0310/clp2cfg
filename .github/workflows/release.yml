@@ -72,6 +72,8 @@ jobs:
         uses: taiki-e/upload-rust-binary-action@v1
         with:
           bin: clp2cfg,clp2cfg-cli
+          # 複数バイナリでは既定の archive 名を使えないため、従来の配布名（clp2cfg-<target>.zip）を明示する
+          archive: clp2cfg-$target
           target: ${{ matrix.target }}
           ref: ${{ github.event_name == 'push' && format('refs/tags/{0}', needs.draft.outputs.tag_name) || '' }}
           zip: all
@@ -79,6 +81,21 @@ jobs:
           locked: true
           dry-run: true
           dry-run-intended: true
+
+      - name: Verify archive contents
+        shell: bash
+        env:
+          ARCHIVE: ${{ steps.archive.outputs.zip }}
+        run: |
+          PY=$(command -v python3 || command -v python)
+          listing=$("$PY" -m zipfile -l "$ARCHIVE")
+          echo "$listing"
+          for bin in clp2cfg clp2cfg-cli; do
+            echo "$listing" | grep -Eq "(^|/)${bin}(\.exe)? " || {
+              echo "::error::$bin is missing from $ARCHIVE"
+              exit 1
+            }
+          done
 
       - name: Write checksum
         shell: bash

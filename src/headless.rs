@@ -753,4 +753,55 @@ mod tests {
             "{content}"
         );
     }
+
+    #[test]
+    fn test_invalid_input_never_echoes_secret_values() {
+        let dir = tempdir().unwrap();
+        let env = FakeEnv::new(vec![file_target(
+            dir.path(),
+            ClientTargetKind::Cursor,
+            "mcp.json",
+            Some("{}"),
+        )]);
+
+        // 引用符なしの数値の認証情報、構文エラーの行に混ざった値、型違いの args
+        let inputs = [
+            (
+                r#"{"srv":{"command":"node","env":{"TOKEN":123456789}}}"#,
+                "123456789",
+            ),
+            (
+                "{srv: {command: 'node', env: {TOKEN: 'sk-secret-xyz' oops}}}",
+                "sk-secret-xyz",
+            ),
+            (
+                r#"{"srv":{"command":"node","args":"sk-secret-args"}}"#,
+                "sk-secret-args",
+            ),
+        ];
+
+        for (input, secret) in inputs {
+            for mode in ["--dry-run", "--apply"] {
+                let mut stdin_env = FakeEnv::new(env.targets.clone());
+                stdin_env.stdin = input.to_string();
+                for report in [
+                    run(&args(&[mode, input]), &env),
+                    run(&args(&[mode, "-"]), &stdin_env),
+                ] {
+                    assert_eq!(report.exit_code, EXIT_USAGE, "{mode}: {report:?}");
+                    assert!(
+                        !report.stdout.contains(secret),
+                        "{mode} stdout: {}",
+                        report.stdout
+                    );
+                    assert!(
+                        !report.stderr.contains(secret),
+                        "{mode} stderr: {}",
+                        report.stderr
+                    );
+                }
+            }
+        }
+        assert_eq!(std::fs::read_to_string(&env.targets[0].path).unwrap(), "{}");
+    }
 }
