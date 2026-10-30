@@ -71,7 +71,7 @@ jobs:
       - id: archive
         uses: taiki-e/upload-rust-binary-action@v1
         with:
-          bin: clp2cfg
+          bin: clp2cfg,clp2cfg-cli
           target: ${{ matrix.target }}
           ref: ${{ github.event_name == 'push' && format('refs/tags/{0}', needs.draft.outputs.tag_name) || '' }}
           zip: all

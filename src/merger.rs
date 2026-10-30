@@ -17,6 +17,17 @@ pub enum ServerChange {
     Unchanged,
 }
 
+impl ServerChange {
+    /// Display label (Japanese) shared by the GUI badges and the headless output.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::New => "新規追加",
+            Self::Updated => "上書き",
+            Self::Unchanged => "変更なし",
+        }
+    }
+}
+
 /// Detect standard client configuration targets on the host system.
 pub fn detect_client_targets(project_dir: Option<&Path>) -> Vec<ClientTarget> {
     let mut targets = Vec::new();
