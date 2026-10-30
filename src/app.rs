@@ -46,6 +46,9 @@ fn build_preview(target: &ClientTarget, servers: &McpServersMap) -> Result<Strin
     }
 }
 
+/// ターゲット一覧が右ペインの高さに占める上限の割合（残りは差分プレビューに使う）
+const TARGET_LIST_HEIGHT_RATIO: f32 = 0.5;
+
 /// 自動読み取りトグルの永続化キー
 const AUTO_READ_STORAGE_KEY: &str = "auto_read_clipboard";
 
@@ -239,6 +242,38 @@ impl Clp2cfgApp {
                 self.status_message = Some((format!("パース失敗: {}", err), true));
             }
         }
+    }
+
+    /// 「適用」で更新される対象の要約と、そのうち CLI を実行する件数。
+    /// 一覧の画面外にあるチェック済みターゲットにも気付けるよう、ボトムバーに常時表示する。
+    pub fn selection_summary(&self) -> (String, usize) {
+        let selected: Vec<_> = self
+            .target_entries
+            .iter()
+            .filter(|e| e.target.selected)
+            .collect();
+        if selected.is_empty() {
+            return ("適用対象: なし".to_string(), 0);
+        }
+
+        let cli_count = selected
+            .iter()
+            .filter(|e| e.target.kind.action() == TargetAction::CliCommand)
+            .count();
+        let names = selected
+            .iter()
+            .map(|e| e.target.name.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let cli_note = if cli_count > 0 {
+            format!("（うち CLI 実行 {} 件）", cli_count)
+        } else {
+            String::new()
+        };
+        (
+            format!("適用対象: {} 件{}: {}", selected.len(), cli_note, names),
+            cli_count,
+        )
     }
 
     /// 現在の設定（入力済みの実値を反映後）でもプレースホルダーのままの env の件数
@@ -502,7 +537,18 @@ impl Clp2cfgApp {
         // ボトムバー（ステータス表示 & アクションボタン）
         // 長いステータス（警告つき等）がボタンに隠れないよう、左側だけを縮める
         let status = self.status_message.clone();
+        let (selection, cli_count) = self.selection_summary();
         egui::Panel::bottom("bottom_panel").show(ui, |ui| {
+            // CLI（サブプロセス実行）を含むときは目を引く色にする
+            let selection_color = if cli_count > 0 {
+                egui::Color32::LIGHT_YELLOW
+            } else {
+                egui::Color32::GRAY
+            };
+            ui.add(
+                egui::Label::new(egui::RichText::new(&selection).color(selection_color)).truncate(),
+            )
+            .on_hover_text(&selection);
             egui::Sides::new().shrink_left().truncate().show(
                 ui,
                 |ui| {
@@ -634,7 +680,7 @@ impl Clp2cfgApp {
             // ターゲット一覧
             egui::ScrollArea::vertical()
                 .id_salt("target_list")
-                .max_height(140.0)
+                .max_height(ui.available_height() * TARGET_LIST_HEIGHT_RATIO)
                 .show(ui, |ui| {
                     for (idx, entry) in self.target_entries.iter_mut().enumerate() {
                         let is_active = idx == self.selected_target_idx;
@@ -1274,5 +1320,73 @@ mod tests {
         assert!(msg.contains("適用完了"), "{msg}");
         assert!(msg.contains("未入力のプレースホルダーが 1 件"), "{msg}");
         assert!(!msg.contains("sk-secret-value"), "{msg}");
+    }
+
+    #[test]
+    fn test_selection_summary() {
+        let temp = tempdir().unwrap();
+        let build = |selected: &[bool]| {
+            let kinds = [
+                ClientTargetKind::Cursor,
+                ClientTargetKind::ClaudeCli,
+                ClientTargetKind::CodexCli,
+            ];
+            let targets = kinds
+                .iter()
+                .zip(selected)
+                .map(|(kind, on)| {
+                    let mut t = make_test_target(temp.path(), *kind, "x");
+                    t.selected = *on;
+                    t
+                })
+                .collect();
+            Clp2cfgApp::new_with_targets(targets)
+        };
+
+        struct Case {
+            /// 選択状態 [Cursor, Claude CLI, Codex CLI]
+            selected: &'static [bool],
+            expected_cli: usize,
+            contains: &'static [&'static str],
+            excludes: &'static [&'static str],
+        }
+
+        let cases = [
+            Case {
+                selected: &[false, false, false],
+                expected_cli: 0,
+                contains: &["適用対象: なし"],
+                excludes: &[],
+            },
+            Case {
+                selected: &[true, false, false],
+                expected_cli: 0,
+                contains: &["1 件", "Cursor"],
+                excludes: &["CLI 実行"],
+            },
+            Case {
+                selected: &[true, true, true],
+                expected_cli: 2,
+                contains: &["3 件", "うち CLI 実行 2 件", "Claude Code CLI", "Codex CLI"],
+                excludes: &[],
+            },
+            Case {
+                selected: &[false, true, false],
+                expected_cli: 1,
+                contains: &["1 件", "うち CLI 実行 1 件"],
+                excludes: &["Cursor"],
+            },
+        ];
+
+        for case in cases {
+            let (text, cli_count) = build(case.selected).selection_summary();
+            assert_eq!(cli_count, case.expected_cli, "text={text}");
+            for needle in case.contains {
+                assert!(text.contains(needle), "text={text}");
+            }
+            for needle in case.excludes {
+                assert!(!text.contains(needle), "text={text}");
+            }
+        }
     }
 }
