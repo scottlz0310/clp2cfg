@@ -78,6 +78,10 @@ cargo build --release
 # target/release/clp2cfg.exe が生成されます
 ```
 
+#### macOS について
+
+macOS 向けのビルド済みバイナリ・Homebrew 配布・動作検証は提供していません（メンテナーが macOS の実機を持たず、検証できないため）。macOS で利用する場合は、上記のソースコードビルド（`cargo install --git https://github.com/scottlz0310/clp2cfg`）を各自でお試しください。動作は未検証です。
+
 ### 3. ポータブル ZIP のダウンロード（単体実行）
 
 [GitHub Releases](https://github.com/scottlz0310/clp2cfg/releases) から最新の ZIP アーカイブ（Windows 用: `clp2cfg-x86_64-pc-windows-msvc.zip`、Linux 用: `clp2cfg-x86_64-unknown-linux-gnu.zip`）をダウンロードし、任意のフォルダに展開してそのまま実行できます。
