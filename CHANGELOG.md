@@ -20,6 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `pipx run パッケージ名 …` を `uvx パッケージ名 …` に書き換える最適化トグルを追加（既定 ON）。`--spec` 等のオプション・URL・パス・バージョン指定つきは書き換えず、`python -m` も対象外（モジュール名とパッケージ名が一致しないことがあるため）
 - スニペット内の `env` に残ったプレースホルダー（`YOUR_API_KEY`、`<token>`、`PASTE_HERE`、`TODO`、`xxxx` 等の伏せ字、空文字）を検知して警告表示し、左ペインのミニ入力欄で実値を入力・置換できるように（入力値は既定でマスク表示、プレビューと適用に反映。未入力のまま適用した場合はステータスに件数を警告）
 - 対応クライアントの拡充: Windsurf, Cline, Roo Code, Zed（AST 直接マージ）
 - 公式 CLI 委譲アダプター（`TargetAction::CliCommand`）: Claude Code / Codex / GitHub Copilot / Antigravity CLI を `mcp add` で登録し（Claude Code / Copilot は同名上書き不可のため事前に `mcp remove`）、実行予定コマンドを差分欄にプレビュー表示

@@ -65,6 +65,8 @@ pub struct Clp2cfgApp {
     pub parsed_config: Result<McpServersMap, String>,
     /// npx を bunx に自動置換するフィルタトグル
     pub replace_npx_with_bunx: bool,
+    /// `pipx run` を uvx に自動置換するフィルタトグル
+    pub replace_pipx_with_uvx: bool,
     /// ターゲットクライアント一覧
     pub target_entries: Vec<TargetEntry>,
     /// 右ペインで差分詳細を表示するターゲットのインデックス
@@ -100,6 +102,7 @@ impl Clp2cfgApp {
             last_parsed_input: String::new(),
             parsed_config: Err("入力が空です".to_string()),
             replace_npx_with_bunx: true,
+            replace_pipx_with_uvx: true,
             target_entries,
             selected_target_idx: 0,
             status_message: None,
@@ -197,6 +200,7 @@ impl Clp2cfgApp {
             Ok(servers) => {
                 let options = FilterOptions {
                     replace_npx_with_bunx: self.replace_npx_with_bunx,
+                    replace_pipx_with_uvx: self.replace_pipx_with_uvx,
                 };
 
                 let mut filtered_servers: McpServersMap = servers
@@ -494,7 +498,7 @@ impl Clp2cfgApp {
 
         // トップバー
         egui::Panel::top("top_panel").show(ui, |ui| {
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
                 ui.heading("clp2cfg");
                 ui.label(
                     egui::RichText::new("MCP Server Config Merger")
@@ -527,6 +531,19 @@ impl Clp2cfgApp {
                 let mut replace = self.replace_npx_with_bunx;
                 if ui.checkbox(&mut replace, "npx → bunx 置換").changed() {
                     self.replace_npx_with_bunx = replace;
+                    self.reparse();
+                }
+
+                let mut replace_pipx = self.replace_pipx_with_uvx;
+                if ui
+                    .checkbox(&mut replace_pipx, "pipx run → uvx 置換")
+                    .on_hover_text(
+                        "`pipx run パッケージ名 …` を `uvx パッケージ名 …` に書き換えます（uv が必要）。\n\
+                         --spec 等のオプション・URL・バージョン指定つきは書き換えません。",
+                    )
+                    .changed()
+                {
+                    self.replace_pipx_with_uvx = replace_pipx;
                     self.reparse();
                 }
 
@@ -920,6 +937,7 @@ mod tests {
         let app = Clp2cfgApp::default();
         assert!(app.parsed_config.is_err());
         assert!(app.replace_npx_with_bunx);
+        assert!(app.replace_pipx_with_uvx);
         assert!(app.auto_read_clipboard);
         assert_eq!(app.selected_target_idx, 0);
     }
@@ -1388,5 +1406,24 @@ mod tests {
                 assert!(!text.contains(needle), "text={text}");
             }
         }
+    }
+
+    #[test]
+    fn test_pipx_run_replacement_follows_toggle() {
+        const SNIPPET: &str =
+            r#"{"git":{"command":"pipx","args":["run","mcp-server-git","--repository","/r"]}}"#;
+
+        let mut app = Clp2cfgApp::new_with_targets(Vec::new());
+        app.raw_input = SNIPPET.to_string();
+        app.reparse();
+        let config = &app.parsed_config.as_ref().unwrap()["git"];
+        assert_eq!(config.command, "uvx");
+        assert_eq!(config.args, ["mcp-server-git", "--repository", "/r"]);
+
+        app.replace_pipx_with_uvx = false;
+        app.reparse();
+        let config = &app.parsed_config.as_ref().unwrap()["git"];
+        assert_eq!(config.command, "pipx");
+        assert_eq!(config.args[0], "run");
     }
 }
