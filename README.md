@@ -24,9 +24,12 @@ Web サイトやドキュメントからコピーした任意の MCP (Model Cont
 - **対象クライアント設定の自動検出と AST マージ**:
   - Claude Code / Claude Desktop (`~/.claude.json`)
   - Cursor (`~/.cursor/mcp.json`)
-  - Codex CLI (`~/.codex/config.json`)
   - VS Code Copilot (`settings.json`)
   - プロジェクト単位設定 (`.mcp.json`)
+  - Windsurf (`~/.codeium/windsurf/mcp_config.json`)
+  - Cline / Roo Code (VS Code `globalStorage` 内の MCP 設定)
+  - Zed (`settings.json` の `context_servers`。JSONC のコメントは書き換え時に失われますが `.bak` に原本が残ります)
+- **公式 CLI への委譲**: Claude Code / Codex / GitHub Copilot / Antigravity の各 CLI は、設定ファイルを直接編集せず `<cli> mcp add` をサブプロセス実行して登録（同名サーバーを上書きできない Claude Code / Copilot のみ事前に `mcp remove`）。実行予定コマンドはプレビュー欄で確認でき、Dry-Run では実行されません
 - **既存設定の温存**: 未知のフィールドや既存ツール設定を破壊せず、MCP 設定のみを安全に注入
 - **安全なアトミック書き込み**: 設定反映前に `.bak` バックアップを作成し、一時ファイルからのアトミック置換を実施
 - **コマンドフィルタ**: `npx` から `bunx` への自動最適化トグル対応

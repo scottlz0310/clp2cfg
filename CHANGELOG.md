@@ -7,8 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+
+- 実在しない `~/.codex/config.json` への Codex ファイルマージターゲットを削除（Codex は `config.toml` を使うため、CLI 委譲ターゲットに一本化）
+
 ### Added
 
+- 対応クライアントの拡充: Windsurf, Cline, Roo Code, Zed（AST 直接マージ）
+- 公式 CLI 委譲アダプター（`TargetAction::CliCommand`）: Claude Code / Codex / GitHub Copilot / Antigravity CLI を `mcp add` で登録し（Claude Code / Copilot は同名上書き不可のため事前に `mcp remove`）、実行予定コマンドを差分欄にプレビュー表示
 - キーボードショートカット操作のサポート（`Ctrl+V`: クリップボード再読み取り、`Ctrl+Enter`: 適用、`Esc`: ウィンドウ閉じる）および UI ヒント表示の追加
 - README への実機 UI スクリーンショットおよびステータスバッジ（CI, Codecov, Release, Scoop, License）の追加 (`assets/screenshot.png`)
 - コントリビューター向けガイドラインおよび PR テンプレートの追加 (`CONTRIBUTING.md`, `.github/PULL_REQUEST_TEMPLATE.md`)
