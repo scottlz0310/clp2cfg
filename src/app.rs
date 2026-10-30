@@ -723,11 +723,18 @@ impl Clp2cfgApp {
                                 self.selected_target_idx = idx;
                             }
 
-                            ui.label(
-                                egui::RichText::new(entry.target.path.to_string_lossy())
-                                    .small()
-                                    .color(egui::Color32::GRAY),
-                            );
+                            // 長いパスが右ペインの幅を押し広げると、下のプレビューの折り返し幅も
+                            // 見えている幅より広くなって見切れるため、残り幅で省略する
+                            let path = entry.target.path.to_string_lossy();
+                            ui.add(
+                                egui::Label::new(
+                                    egui::RichText::new(path.as_ref())
+                                        .small()
+                                        .color(egui::Color32::GRAY),
+                                )
+                                .truncate(),
+                            )
+                            .on_hover_text(path.as_ref());
                         });
                     }
                 });
@@ -753,15 +760,27 @@ impl Clp2cfgApp {
                 if let Some(error) = &entry.error {
                     ui.label(egui::RichText::new(error).color(egui::Color32::LIGHT_RED));
                 } else if let Some(preview) = &entry.diff_preview {
+                    let is_cli = entry.target.kind.action() == TargetAction::CliCommand;
                     egui::ScrollArea::vertical()
                         .id_salt("diff_preview_scroll")
                         .show(ui, |ui| {
-                            ui.add(
-                                egui::TextEdit::multiline(&mut preview.as_str())
-                                    .font(egui::TextStyle::Monospace)
-                                    .code_editor()
-                                    .desired_width(f32::INFINITY),
-                            );
+                            if is_cli {
+                                // 1 コマンドが長くなりがちなため、TextEdit ではなく折り返すラベルで全文を見せる
+                                for command in preview.lines() {
+                                    ui.add(
+                                        egui::Label::new(egui::RichText::new(command).monospace())
+                                            .wrap(),
+                                    );
+                                    ui.add_space(6.0);
+                                }
+                            } else {
+                                ui.add(
+                                    egui::TextEdit::multiline(&mut preview.as_str())
+                                        .font(egui::TextStyle::Monospace)
+                                        .code_editor()
+                                        .desired_width(f32::INFINITY),
+                                );
+                            }
                         });
                 } else {
                     ui.label(
@@ -1425,5 +1444,55 @@ mod tests {
         let config = &app.parsed_config.as_ref().unwrap()["git"];
         assert_eq!(config.command, "pipx");
         assert_eq!(config.args[0], "run");
+    }
+
+    /// 描画された文字列のうち `needle` を含むものの右端（画面座標）の最大値
+    fn max_text_right_edge(shapes: &[egui::epaint::ClippedShape], needle: &str) -> Option<f32> {
+        shapes
+            .iter()
+            .filter_map(|clipped| match &clipped.shape {
+                egui::epaint::Shape::Text(text) if text.galley.text().contains(needle) => {
+                    Some(text.pos.x + text.galley.rect.max.x)
+                }
+                _ => None,
+            })
+            .reduce(f32::max)
+    }
+
+    #[test]
+    fn test_cli_command_preview_wraps_within_screen() {
+        const SCREEN_WIDTH: f32 = 960.0;
+
+        // 非常に長いパスのターゲット行が右ペインの幅を押し広げても、
+        // 実行予定コマンドは画面幅の中で折り返されること
+        let temp = tempdir().unwrap();
+        let long_name = format!("{}.json", "d".repeat(300));
+        let file_target = make_test_target(temp.path(), ClientTargetKind::Cursor, &long_name);
+        let mut cli_target = ClientTarget::new_cli(ClientTargetKind::ClaudeCli, None);
+        cli_target.path = std::path::PathBuf::from("claude");
+
+        let mut app = Clp2cfgApp::new_with_targets(vec![file_target, cli_target]);
+        app.auto_read_clipboard = false;
+        app.selected_target_idx = 1;
+        app.raw_input = r#"{"srv":{"command":"uvx","args":["mcp-server-everything-and-more"],"env":{"E2E_KEY":"value with space"}}}"#.to_string();
+        app.reparse();
+
+        let ctx = egui::Context::default();
+        let raw_input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(SCREEN_WIDTH, 640.0),
+            )),
+            ..Default::default()
+        };
+        let mut output = ctx.run_ui(raw_input, |ui| app.render_ui(ui));
+        output.textures_delta.clear();
+
+        let right = max_text_right_edge(&output.shapes, "mcp add")
+            .expect("コマンドのプレビューが描画されていること");
+        assert!(
+            right <= SCREEN_WIDTH,
+            "コマンドが画面幅 {SCREEN_WIDTH} を超えて描画された: {right}"
+        );
     }
 }
