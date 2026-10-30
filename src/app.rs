@@ -8,6 +8,7 @@ use crate::parser::parse_mcp_snippet;
 use crate::placeholder::{
     fill_placeholders, find_placeholders, is_placeholder, EnvOverrides, EnvRef,
 };
+use crate::undo::{undo_file, AppliedFile, LastApply, UndoAction};
 use crate::writer::safe_atomic_write;
 use std::collections::BTreeMap;
 
@@ -134,6 +135,8 @@ pub struct Clp2cfgApp {
     env_overrides: EnvOverrides,
     /// 入力欄の値を平文で表示するか
     reveal_env_inputs: bool,
+    /// 直前の（Dry-Run でない）適用の記録。ファイル系を書き込めたときだけ持ち、メモリ上のみ
+    last_apply: Option<LastApply>,
     /// 前回クリップボードから取り込んだ（または判定した）内容。同一内容の再取込で編集中の入力を上書きしないために保持する
     last_clipboard_seen: Option<String>,
     /// 前回フレームでのウィンドウフォーカス状態
@@ -163,6 +166,7 @@ impl Clp2cfgApp {
             placeholder_fields: Vec::new(),
             env_overrides: EnvOverrides::new(),
             reveal_env_inputs: false,
+            last_apply: None,
             last_clipboard_seen: None,
             was_focused: false,
         }
@@ -408,6 +412,82 @@ impl Clp2cfgApp {
         }
     }
 
+    /// 取り消しボタンの説明（取り消せる適用がなければ `None`）
+    fn undo_hint(&self) -> Option<String> {
+        let last = self.last_apply.as_ref()?;
+        let names = last
+            .files
+            .iter()
+            .map(|f| f.target_name.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let mut hint = format!(
+            "直前の適用で書き込んだファイルを元に戻します（{}）。\n\
+             既存ファイルは .bak から復元し、新規作成したファイルは削除します。\n\
+             適用後に内容が変わっているファイルは取り消しません。",
+            names
+        );
+        if !last.cli_targets.is_empty() {
+            hint.push_str(&format!(
+                "\nCLI 委譲（{}）は取り消せません。各 CLI の `mcp remove` で削除してください。",
+                last.cli_targets.join(", ")
+            ));
+        }
+        Some(hint)
+    }
+
+    /// 直前の適用で書き込んだファイルを元に戻す（ファイル系のみ）
+    pub fn undo_last_apply(&mut self) {
+        let Some(last) = self.last_apply.take() else {
+            self.status_message = Some(("取り消せる適用がありません".to_string(), true));
+            return;
+        };
+
+        let mut done = Vec::new();
+        let mut failed = Vec::new();
+        for file in &last.files {
+            match undo_file(file) {
+                Ok(action) => {
+                    let label = match action {
+                        UndoAction::Restored => "復元",
+                        UndoAction::Removed => "削除",
+                        UndoAction::AlreadyGone => "既に削除済み",
+                    };
+                    done.push(format!("{}({})", file.target_name, label));
+                }
+                Err(err) => failed.push(format!("{}: {}", file.target_name, err)),
+            }
+            if let Some(entry) = self
+                .target_entries
+                .iter_mut()
+                .find(|e| e.target.path == file.path)
+            {
+                entry.target.exists = entry.target.path.is_file();
+            }
+        }
+
+        // ファイルが変わったので、プレビューと判定を作り直す（ステータスを上書きするので先に行う）
+        self.reparse();
+
+        let mut message = if failed.is_empty() {
+            format!("取り消し完了: {} 件 ({})", done.len(), done.join(", "))
+        } else {
+            format!(
+                "取り消しに失敗: 成功 {} 件, 失敗 {} 件 ({})",
+                done.len(),
+                failed.len(),
+                failed.join("; ")
+            )
+        };
+        if !last.cli_targets.is_empty() {
+            message.push_str(&format!(
+                " ※ CLI 委譲（{}）は取り消せません",
+                last.cli_targets.join(", ")
+            ));
+        }
+        self.status_message = Some((message, !failed.is_empty()));
+    }
+
     /// 選択されたターゲットにマージを適用（または Dry-Run シミュレーション）する
     pub fn apply_all(&mut self, dry_run: bool) {
         let servers = match &self.parsed_config {
@@ -432,6 +512,8 @@ impl Clp2cfgApp {
 
         let mut success_targets = Vec::new();
         let mut fail_targets = Vec::new();
+        let mut applied_files = Vec::new();
+        let mut applied_clis = Vec::new();
 
         for entry in &mut self.target_entries {
             if !entry.target.selected {
@@ -440,13 +522,22 @@ impl Clp2cfgApp {
 
             let result = match entry.target.kind.action() {
                 TargetAction::FileMerge => {
+                    let had_original = entry.target.path.is_file();
                     build_preview(&entry.target, &servers).and_then(|merged| {
                         if dry_run {
                             return Ok(());
                         }
                         safe_atomic_write(&entry.target.path, &merged)
                             .map_err(|e| e.to_string())
-                            .map(|_| entry.target.exists = true)
+                            .map(|_| {
+                                entry.target.exists = true;
+                                applied_files.push(AppliedFile {
+                                    target_name: entry.target.name.clone(),
+                                    path: entry.target.path.clone(),
+                                    written: merged,
+                                    had_original,
+                                });
+                            })
                     })
                 }
                 TargetAction::CliCommand => {
@@ -465,9 +556,23 @@ impl Clp2cfgApp {
 
             match result {
                 Ok(()) if dry_run => success_targets.push(format!("{}(検証OK)", entry.target.name)),
-                Ok(()) => success_targets.push(entry.target.name.clone()),
+                Ok(()) => {
+                    if entry.target.kind.action() == TargetAction::CliCommand {
+                        applied_clis.push(entry.target.name.clone());
+                    }
+                    success_targets.push(entry.target.name.clone());
+                }
                 Err(err) => fail_targets.push(format!("{}: {}", entry.target.name, err)),
             }
+        }
+
+        // 何も変更できなかった適用では、直前の記録を残す。CLI だけを実行した適用は取り消せないので、
+        // 古い記録が「直前の適用」と誤認されないよう破棄する
+        if !dry_run && (!applied_files.is_empty() || !applied_clis.is_empty()) {
+            self.last_apply = (!applied_files.is_empty()).then_some(LastApply {
+                files: applied_files,
+                cli_targets: applied_clis,
+            });
         }
 
         let prefix = if dry_run { "[Dry-Run] " } else { "" };
@@ -612,6 +717,7 @@ impl Clp2cfgApp {
         // 長いステータス（警告つき等）がボタンに隠れないよう、左側だけを縮める
         let status = self.status_message.clone();
         let (selection, cli_count) = self.selection_summary();
+        let undo_hint = self.undo_hint();
         egui::Panel::bottom("bottom_panel").show(ui, |ui| {
             // CLI（サブプロセス実行）を含むときは目を引く色にする
             let selection_color = if cli_count > 0 {
@@ -662,6 +768,20 @@ impl Clp2cfgApp {
                         .clicked()
                     {
                         self.apply_all(true);
+                    }
+
+                    let undo_button = ui.add_enabled(
+                        undo_hint.is_some(),
+                        egui::Button::new("↩ 直前の適用を取り消す"),
+                    );
+                    let undo_clicked = undo_button.clicked();
+                    undo_button.on_hover_text(
+                        undo_hint
+                            .as_deref()
+                            .unwrap_or("取り消せる適用がありません（適用すると有効になります）"),
+                    );
+                    if undo_clicked {
+                        self.undo_last_apply();
                     }
 
                     ui.label(
@@ -1646,5 +1766,135 @@ mod tests {
             ["新規追加", "上書き", "変更なし"]
         );
         assert_ne!(new_color, updated_color);
+    }
+
+    /// 新規 or 既存のファイルターゲット 1 件を選択したアプリと、そのファイルパス
+    fn app_with_file_target(
+        dir: &std::path::Path,
+        existing: Option<&str>,
+    ) -> (Clp2cfgApp, std::path::PathBuf) {
+        let path = dir.join("mcp.json");
+        if let Some(content) = existing {
+            std::fs::write(&path, content).unwrap();
+        }
+        let mut target = ClientTarget::new(ClientTargetKind::Cursor, path.clone());
+        target.selected = true;
+        let mut app = Clp2cfgApp::new_with_targets(vec![target]);
+        app.auto_read_clipboard = false;
+        app.replace_npx_with_bunx = false;
+        app.raw_input = r#"{"added":{"command":"node"}}"#.to_string();
+        app.reparse();
+        (app, path)
+    }
+
+    #[test]
+    fn test_undo_removes_file_created_by_apply() {
+        let temp = tempdir().unwrap();
+        let (mut app, path) = app_with_file_target(temp.path(), None);
+        assert!(app.undo_hint().is_none(), "適用前は取り消せない");
+
+        app.apply_all(false);
+        assert!(path.is_file());
+        assert!(app.undo_hint().is_some());
+
+        app.undo_last_apply();
+
+        assert!(!path.exists());
+        assert!(!app.target_entries[0].target.exists);
+        let (msg, is_err) = app.status_message.clone().unwrap();
+        assert!(!is_err, "{msg}");
+        assert!(
+            msg.contains("取り消し完了") && msg.contains("削除"),
+            "{msg}"
+        );
+        assert!(app.undo_hint().is_none(), "取り消しは 1 回限り");
+    }
+
+    #[test]
+    fn test_undo_restores_existing_file_from_backup() {
+        let temp = tempdir().unwrap();
+        let original = r#"{"mcpServers":{"keep":{"command":"x"}}}"#;
+        let (mut app, path) = app_with_file_target(temp.path(), Some(original));
+
+        app.apply_all(false);
+        assert!(std::fs::read_to_string(&path).unwrap().contains("added"));
+
+        app.undo_last_apply();
+
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
+        let (msg, is_err) = app.status_message.clone().unwrap();
+        assert!(!is_err && msg.contains("復元"), "{msg}");
+        // 取り消し後はプレビューが元のファイルから作り直される
+        let changes = app.target_entries[0].changes.as_ref().unwrap();
+        assert_eq!(changes["added"], ServerChange::New);
+    }
+
+    #[test]
+    fn test_undo_refuses_when_file_changed_after_apply() {
+        let temp = tempdir().unwrap();
+        let (mut app, path) = app_with_file_target(temp.path(), Some(r#"{"a":1}"#));
+        app.apply_all(false);
+        std::fs::write(&path, "edited after apply").unwrap();
+
+        app.undo_last_apply();
+
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "edited after apply"
+        );
+        let (msg, is_err) = app.status_message.clone().unwrap();
+        assert!(is_err && msg.contains("取り消しに失敗"), "{msg}");
+    }
+
+    #[test]
+    fn test_dry_run_and_failed_apply_do_not_replace_last_apply() {
+        let temp = tempdir().unwrap();
+        let (mut app, _path) = app_with_file_target(temp.path(), None);
+
+        // Dry-Run は記録しない
+        app.apply_all(true);
+        assert!(app.undo_hint().is_none());
+
+        // 適用すると記録される。その後、何も変更できなかった適用（存在しない CLI）では記録を残す
+        app.apply_all(false);
+        let recorded = app.last_apply.clone();
+        assert!(recorded.is_some());
+
+        let mut cli = ClientTarget::new_cli(ClientTargetKind::CodexCli, None);
+        cli.path = std::path::PathBuf::from("clp2cfg-nonexistent-binary");
+        cli.selected = true;
+        app.target_entries[0].target.selected = false;
+        app.target_entries.push(TargetEntry::new(cli));
+        app.apply_all(false);
+        assert!(
+            app.status_message.as_ref().unwrap().1,
+            "CLI の実行は失敗する"
+        );
+        assert_eq!(app.last_apply, recorded);
+    }
+
+    #[test]
+    fn test_undo_hint_mentions_cli_targets_cannot_be_undone() {
+        let mut app = Clp2cfgApp::new_with_targets(Vec::new());
+        app.last_apply = Some(LastApply {
+            files: vec![AppliedFile {
+                target_name: "Cursor".to_string(),
+                path: std::path::PathBuf::from("x"),
+                written: String::new(),
+                had_original: false,
+            }],
+            cli_targets: vec!["Codex CLI".to_string()],
+        });
+
+        let hint = app.undo_hint().unwrap();
+
+        assert!(hint.contains("Cursor"), "{hint}");
+        assert!(
+            hint.contains("Codex CLI") && hint.contains("取り消せません"),
+            "{hint}"
+        );
+        // 描画（ボタンと説明）で panic しない
+        let ctx = egui::Context::default();
+        run_headless(&ctx, &mut app);
     }
 }
