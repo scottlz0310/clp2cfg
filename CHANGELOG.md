@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-30
+
 ### Fixed
 
 - CLI 委譲ターゲットの「実行予定コマンド」が右端で見切れて全文を確認できない問題を修正。ターゲット一覧の非常に長いパスが右ペインの幅を押し広げ、プレビューが見えている幅より広く折り返されていたため、一覧のパスを残り幅で省略表示（ホバーで全文）に変更し、コマンドは折り返し表示にした
@@ -117,5 +119,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `Cargo.toml` の `[dev-dependencies]` から重複していた `tempfile` を削除
 
-[Unreleased]: https://github.com/scottlz0310/clp2cfg/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/scottlz0310/clp2cfg/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/scottlz0310/clp2cfg/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/scottlz0310/clp2cfg/releases/tag/v0.1.0
