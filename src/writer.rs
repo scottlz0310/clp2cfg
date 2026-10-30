@@ -5,19 +5,24 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
+/// The path of the backup made before overwriting `target_path` (e.g. `mcp.json` -> `mcp.json.bak`).
+pub fn backup_path_for(target_path: &Path) -> PathBuf {
+    target_path.with_extension(format!(
+        "{}.bak",
+        target_path
+            .extension()
+            .and_then(|s| s.to_str())
+            .unwrap_or("json")
+    ))
+}
+
 /// Creates a backup of the target file if it already exists.
 pub fn create_backup_if_exists(target_path: &Path) -> Result<Option<PathBuf>, WriteError> {
     if !target_path.is_file() {
         return Ok(None);
     }
 
-    let backup_path = target_path.with_extension(format!(
-        "{}.bak",
-        target_path
-            .extension()
-            .and_then(|s| s.to_str())
-            .unwrap_or("json")
-    ));
+    let backup_path = backup_path_for(target_path);
 
     fs::copy(target_path, &backup_path).map_err(|source| WriteError::BackupFailed {
         path: backup_path.clone(),
@@ -46,6 +51,25 @@ pub fn safe_atomic_write(target_path: &Path, content: &str) -> Result<(), WriteE
 
     // 4. Atomically replace target path
     // On Windows, rename over an existing file fails, so we handle it with a safe swap.
+    replace_atomically(temp_file, target_path)
+}
+
+/// Atomically restores `target_path` from its `.bak`.
+///
+/// The `.bak` is left in place and no new backup of the current content is made
+/// (unlike [`safe_atomic_write`], which would overwrite the `.bak` being restored).
+pub fn restore_from_backup(target_path: &Path) -> Result<(), WriteError> {
+    let backup_path = backup_path_for(target_path);
+    if !backup_path.is_file() {
+        return Err(WriteError::BackupMissing(backup_path));
+    }
+    let content = fs::read(&backup_path)?;
+
+    let parent = target_path.parent().unwrap_or_else(|| Path::new("."));
+    let mut temp_file = tempfile::NamedTempFile::new_in(parent)?;
+    temp_file.write_all(&content)?;
+    temp_file.flush()?;
+
     replace_atomically(temp_file, target_path)
 }
 
@@ -127,5 +151,44 @@ mod tests {
         assert!(backup_path.is_file());
         let backup_read = fs::read_to_string(&backup_path).unwrap();
         assert_eq!(backup_read, "initial content");
+    }
+
+    #[test]
+    fn test_backup_path_for() {
+        let cases = [
+            ("/a/mcp.json", "/a/mcp.json.bak"),
+            ("/a/settings.jsonc", "/a/settings.jsonc.bak"),
+            ("/a/noext", "/a/noext.json.bak"),
+        ];
+        for (target, expected) in cases {
+            assert_eq!(backup_path_for(Path::new(target)), Path::new(expected));
+        }
+    }
+
+    #[test]
+    fn test_restore_from_backup_replaces_content_and_keeps_backup() {
+        let dir = tempdir().unwrap();
+        let file_path = dir.path().join("config.json");
+        safe_atomic_write(&file_path, "original").unwrap();
+        safe_atomic_write(&file_path, "updated").unwrap();
+
+        restore_from_backup(&file_path).unwrap();
+
+        assert_eq!(fs::read_to_string(&file_path).unwrap(), "original");
+        // .bak は残り、復元によって上書きされない
+        let backup_path = dir.path().join("config.json.bak");
+        assert_eq!(fs::read_to_string(backup_path).unwrap(), "original");
+    }
+
+    #[test]
+    fn test_restore_from_backup_without_backup_fails() {
+        let dir = tempdir().unwrap();
+        let file_path = dir.path().join("config.json");
+        fs::write(&file_path, "current").unwrap();
+
+        let err = restore_from_backup(&file_path).unwrap_err();
+
+        assert!(matches!(err, WriteError::BackupMissing(_)));
+        assert_eq!(fs::read_to_string(&file_path).unwrap(), "current");
     }
 }

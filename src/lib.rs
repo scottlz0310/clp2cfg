@@ -5,4 +5,5 @@ pub mod merger;
 pub mod model;
 pub mod parser;
 pub mod placeholder;
+pub mod undo;
 pub mod writer;

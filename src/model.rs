@@ -191,6 +191,9 @@ pub enum WriteError {
         path: PathBuf,
         source: tempfile::PersistError,
     },
+
+    #[error("Backup file not found: {0}")]
+    BackupMissing(PathBuf),
 }
 
 /// Error types occurring while building or running official CLI commands.
