@@ -26,15 +26,7 @@ pub fn detect_client_targets(project_dir: Option<&Path>) -> Vec<ClientTarget> {
         ));
     }
 
-    // 3. Codex CLI
-    if let Some(ref h) = home {
-        targets.push(ClientTarget::new(
-            ClientTargetKind::Codex,
-            h.join(".codex").join("config.json"),
-        ));
-    }
-
-    // 4. VS Code Copilot settings.json
+    // 3. VS Code Copilot settings.json
     let vscode_user = vscode_user_dir(home.as_deref());
     if let Some(ref dir) = vscode_user {
         targets.push(ClientTarget::new(
@@ -43,7 +35,7 @@ pub fn detect_client_targets(project_dir: Option<&Path>) -> Vec<ClientTarget> {
         ));
     }
 
-    // 5. Project Local (.mcp.json or mcp.json)
+    // 4. Project Local (.mcp.json or mcp.json)
     let cwd = std::env::current_dir().ok();
     let base_dir = project_dir.or(cwd.as_deref());
 
@@ -165,7 +157,6 @@ pub fn merge_mcp_servers(
         | ClientTargetKind::Windsurf
         | ClientTargetKind::Cline
         | ClientTargetKind::RooCode => "mcpServers",
-        ClientTargetKind::Codex => "mcp",
         ClientTargetKind::VsCode => "github.copilot.chat.mcp",
         ClientTargetKind::Zed => "context_servers",
         ClientTargetKind::ClaudeCli
@@ -279,18 +270,6 @@ mod tests {
         let val: Value = serde_json::from_str(&merged).unwrap();
 
         assert_eq!(val["mcpServers"]["my-server"]["command"], "new-cmd");
-    }
-
-    #[test]
-    fn test_merge_codex_target_uses_mcp_key() {
-        let mut servers = McpServersMap::new();
-        servers.insert("codex-server".to_string(), create_dummy_server("docker"));
-
-        let merged = merge_mcp_servers(ClientTargetKind::Codex, None, &servers).unwrap();
-        let val: Value = serde_json::from_str(&merged).unwrap();
-
-        assert!(val.get("mcp").is_some());
-        assert_eq!(val["mcp"]["codex-server"]["command"], "docker");
     }
 
     #[test]

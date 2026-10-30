@@ -51,7 +51,6 @@ pub enum ClientTargetKind {
     // --- File merge targets ---
     Claude,
     Cursor,
-    Codex,
     VsCode,
     Project,
     Windsurf,
@@ -71,7 +70,6 @@ impl ClientTargetKind {
         match self {
             Self::Claude => "Claude Code / Desktop",
             Self::Cursor => "Cursor",
-            Self::Codex => "Codex (config.json)",
             Self::VsCode => "VS Code Copilot",
             Self::Project => "Project Local (.mcp.json)",
             Self::Windsurf => "Windsurf",
