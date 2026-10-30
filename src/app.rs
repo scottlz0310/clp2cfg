@@ -1,16 +1,14 @@
-use crate::cli::{build_cli_invocations, preview_invocations, run_invocations};
+use crate::cli::{build_cli_invocations, run_invocations};
 use crate::filter::{apply_filters, FilterOptions};
-use crate::merger::{
-    classify_server_changes, detect_client_targets, merge_mcp_servers, ServerChange,
-};
+use crate::merger::{detect_client_targets, ServerChange};
 use crate::model::{ClientTarget, McpServersMap, TargetAction};
 use crate::parser::parse_mcp_snippet;
 use crate::placeholder::{
     fill_placeholders, find_placeholders, is_placeholder, EnvOverrides, EnvRef,
 };
+use crate::preview::{build_preview, build_preview_with_changes, ServerChanges};
 use crate::undo::{undo_file, AppliedFile, LastApply, UndoAction};
 use crate::writer::safe_atomic_write;
-use std::collections::BTreeMap;
 
 /// 各クライアント設定ターゲットの GUI 表示・状態
 #[derive(Debug, Clone)]
@@ -43,16 +41,14 @@ impl TargetEntry {
     }
 }
 
-/// サーバー名ごとの判定
-pub type ServerChanges = BTreeMap<String, ServerChange>;
-
 /// 判定の表示ラベルと色
 fn change_badge(change: ServerChange) -> (&'static str, egui::Color32) {
-    match change {
-        ServerChange::New => ("新規追加", egui::Color32::LIGHT_GREEN),
-        ServerChange::Updated => ("上書き", egui::Color32::YELLOW),
-        ServerChange::Unchanged => ("変更なし", egui::Color32::GRAY),
-    }
+    let color = match change {
+        ServerChange::New => egui::Color32::LIGHT_GREEN,
+        ServerChange::Updated => egui::Color32::YELLOW,
+        ServerChange::Unchanged => egui::Color32::GRAY,
+    };
+    (change.label(), color)
 }
 
 /// 判定ごとの件数の要約（例: `新規追加 1 件 / 上書き 2 件 / 変更なし 0 件`）
@@ -66,42 +62,27 @@ fn change_summary(changes: &ServerChanges) -> String {
     )
 }
 
-/// ターゲットへの適用予定内容（ファイルマージ結果 or 実行予定 CLI コマンド）と、
-/// ファイル系ターゲットでのサーバーごとの判定（新規追加 / 上書き / 変更なし）を生成する。
-/// CLI 委譲ターゲットは既存の登録を事前に確認できないため、判定は `None`。
-fn build_preview_with_changes(
-    target: &ClientTarget,
-    servers: &McpServersMap,
-) -> Result<(String, Option<ServerChanges>), String> {
-    match target.kind.action() {
-        TargetAction::FileMerge => {
-            let existing = if target.path.is_file() {
-                std::fs::read_to_string(&target.path).ok()
-            } else {
-                None
-            };
-            let merged = merge_mcp_servers(target.kind, existing.as_deref(), servers)
-                .map_err(|e| e.to_string())?;
-            let changes = classify_server_changes(target.kind, existing.as_deref(), servers)
-                .map_err(|e| e.to_string())?;
-            Ok((merged, Some(changes)))
-        }
-        TargetAction::CliCommand => {
-            let program = target.path.to_string_lossy();
-            build_cli_invocations(target.kind, &program, servers)
-                .map(|inv| (preview_invocations(&inv), None))
-                .map_err(|e| e.to_string())
+/// ターゲット一覧が右ペインの高さに占める上限の割合（残りは差分プレビューに使う）
+const TARGET_LIST_HEIGHT_RATIO: f32 = 0.5;
+
+/// 起動引数から渡される、GUI の初期状態
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StartupOptions {
+    /// 起動引数の INPUT。`Ok` は流し込む内容、`Err` は読み込みに失敗したメッセージ
+    pub initial_input: Option<Result<String, String>>,
+    pub replace_npx_with_bunx: bool,
+    pub replace_pipx_with_uvx: bool,
+}
+
+impl Default for StartupOptions {
+    fn default() -> Self {
+        Self {
+            initial_input: None,
+            replace_npx_with_bunx: true,
+            replace_pipx_with_uvx: true,
         }
     }
 }
-
-/// ターゲットへの適用予定内容だけが必要な場合（適用時）
-fn build_preview(target: &ClientTarget, servers: &McpServersMap) -> Result<String, String> {
-    build_preview_with_changes(target, servers).map(|(preview, _)| preview)
-}
-
-/// ターゲット一覧が右ペインの高さに占める上限の割合（残りは差分プレビューに使う）
-const TARGET_LIST_HEIGHT_RATIO: f32 = 0.5;
 
 /// 自動読み取りトグルの永続化キー
 const AUTO_READ_STORAGE_KEY: &str = "auto_read_clipboard";
@@ -172,8 +153,8 @@ impl Clp2cfgApp {
         }
     }
 
-    /// eframe 用のコンストラクタ（フォント設定、保存済みトグルの復元、起動時のクリップボード自動読み取り）
-    pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
+    /// eframe 用のコンストラクタ（フォント設定、保存済みトグルの復元、起動引数の反映、起動時のクリップボード自動読み取り）
+    pub fn new(cc: &eframe::CreationContext<'_>, startup: StartupOptions) -> Self {
         setup_system_fonts(&cc.egui_ctx);
         let mut app = Self::default();
         if let Some(enabled) = cc
@@ -182,10 +163,36 @@ impl Clp2cfgApp {
         {
             app.auto_read_clipboard = enabled;
         }
-        if app.auto_read_clipboard {
-            app.auto_read_from_clipboard();
-        }
+        app.apply_startup(startup);
         app
+    }
+
+    /// 起動引数を反映する。INPUT があるときはそれを流し込み、起動時のクリップボード自動読み取りは行わない
+    /// （引数で明示された入力を、クリップボードの内容で上書きしないため）。
+    pub fn apply_startup(&mut self, startup: StartupOptions) {
+        self.replace_npx_with_bunx = startup.replace_npx_with_bunx;
+        self.replace_pipx_with_uvx = startup.replace_pipx_with_uvx;
+
+        match startup.initial_input {
+            Some(Ok(text)) => self.preload_input(&text),
+            Some(Err(message)) => self.status_message = Some((message, true)),
+            None if self.auto_read_clipboard => {
+                self.auto_read_from_clipboard();
+            }
+            None => {}
+        }
+    }
+
+    /// 入力欄へ内容を流し込み、パースとプレビューまで済ませる
+    fn preload_input(&mut self, text: &str) {
+        self.raw_input = text.to_string();
+        self.env_overrides.clear();
+        self.reparse();
+        if self.parsed_config.is_ok() {
+            self.status_message = Some(("起動引数の入力を読み込みました".to_string(), false));
+        }
+        // この時点のクリップボードは「判定済み」とし、後から別の内容がコピーされたときだけ自動読み取りの対象にする
+        self.last_clipboard_seen = Self::get_clipboard_text().map(|text| text.trim().to_string());
     }
 
     /// 手動操作（ボタン・Ctrl+V）用: OS クリップボードの文字列を内容を問わず入力欄に展開してパースする
@@ -1896,5 +1903,70 @@ mod tests {
         // 描画（ボタンと説明）で panic しない
         let ctx = egui::Context::default();
         run_headless(&ctx, &mut app);
+    }
+
+    #[test]
+    fn test_apply_startup_preloads_input_and_filter_flags() {
+        let mut app = Clp2cfgApp::new_with_targets(Vec::new());
+        app.auto_read_clipboard = true;
+
+        app.apply_startup(StartupOptions {
+            initial_input: Some(Ok(
+                r#"{"srv":{"command":"npx","args":["-y","pkg"]},"py":{"command":"pipx","args":["run","tool"]}}"#
+                    .to_string(),
+            )),
+            replace_npx_with_bunx: false,
+            replace_pipx_with_uvx: false,
+        });
+
+        let servers = app.parsed_config.as_ref().unwrap();
+        assert_eq!(
+            servers["srv"].command, "npx",
+            "--no-npx-to-bunx が反映される"
+        );
+        assert_eq!(
+            servers["py"].command, "pipx",
+            "--no-pipx-to-uvx が反映される"
+        );
+        assert!(!app.replace_npx_with_bunx && !app.replace_pipx_with_uvx);
+        let (msg, is_err) = app.status_message.clone().unwrap();
+        assert!(!is_err && msg.contains("起動引数"), "{msg}");
+        // 永続化されるトグルは起動引数で書き換えない
+        assert!(app.auto_read_clipboard);
+    }
+
+    #[test]
+    fn test_apply_startup_reports_input_errors_and_keeps_the_error_visible() {
+        let mut app = Clp2cfgApp::new_with_targets(Vec::new());
+        app.auto_read_clipboard = true;
+
+        app.apply_startup(StartupOptions {
+            initial_input: Some(Err("ファイルを読み取れません: x".to_string())),
+            ..StartupOptions::default()
+        });
+
+        let (msg, is_err) = app.status_message.clone().unwrap();
+        assert!(is_err && msg.contains("ファイルを読み取れません"), "{msg}");
+        assert!(app.raw_input.is_empty());
+    }
+
+    #[test]
+    fn test_apply_startup_with_invalid_input_shows_the_parse_error() {
+        let mut app = Clp2cfgApp::new_with_targets(Vec::new());
+
+        app.apply_startup(StartupOptions {
+            initial_input: Some(Ok("{ not json".to_string())),
+            ..StartupOptions::default()
+        });
+
+        assert!(app.parsed_config.is_err());
+        assert!(app.status_message.as_ref().unwrap().1);
+    }
+
+    #[test]
+    fn test_startup_options_default_matches_gui_defaults() {
+        let startup = StartupOptions::default();
+        assert!(startup.initial_input.is_none());
+        assert!(startup.replace_npx_with_bunx && startup.replace_pipx_with_uvx);
     }
 }

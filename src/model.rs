@@ -65,6 +65,45 @@ pub enum ClientTargetKind {
 }
 
 impl ClientTargetKind {
+    /// Every target kind, in display order.
+    pub const ALL: [Self; 12] = [
+        Self::Claude,
+        Self::Cursor,
+        Self::VsCode,
+        Self::Project,
+        Self::Windsurf,
+        Self::Cline,
+        Self::RooCode,
+        Self::Zed,
+        Self::ClaudeCli,
+        Self::CodexCli,
+        Self::CopilotCli,
+        Self::AntigravityCli,
+    ];
+
+    /// Stable identifier used on the command line (`--target <name>`).
+    pub fn cli_name(&self) -> &'static str {
+        match self {
+            Self::Claude => "claude",
+            Self::Cursor => "cursor",
+            Self::VsCode => "vscode",
+            Self::Project => "project",
+            Self::Windsurf => "windsurf",
+            Self::Cline => "cline",
+            Self::RooCode => "roo-code",
+            Self::Zed => "zed",
+            Self::ClaudeCli => "claude-cli",
+            Self::CodexCli => "codex-cli",
+            Self::CopilotCli => "copilot-cli",
+            Self::AntigravityCli => "antigravity-cli",
+        }
+    }
+
+    /// Inverse of [`cli_name`](Self::cli_name).
+    pub fn from_cli_name(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|kind| kind.cli_name() == name)
+    }
+
     /// Friendly display name of the client target.
     pub fn display_name(&self) -> &'static str {
         match self {
