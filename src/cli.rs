@@ -85,6 +85,8 @@ fn add_args(kind: ClientTargetKind, name: &str, config: &NormalizedServerConfig)
     if kind == ClientTargetKind::ClaudeCli {
         args.extend(["--scope".into(), "user".into()]);
     }
+    // `claude mcp add` の `-e` は可変長引数のため、name を先に置かないと name が env として解釈される
+    args.push(name.to_string());
     for (k, v) in &config.env {
         args.push(
             if kind == ClientTargetKind::ClaudeCli {
@@ -96,7 +98,6 @@ fn add_args(kind: ClientTargetKind, name: &str, config: &NormalizedServerConfig)
         );
         args.push(format!("{k}={v}"));
     }
-    args.push(name.to_string());
     args.push("--".into());
     args.push(config.command.clone());
     args.extend(config.args.iter().cloned());
@@ -225,7 +226,7 @@ mod tests {
         assert!(inv[0].ignore_failure);
         assert_eq!(
             inv[1].display(),
-            "codex mcp add --env 'API_KEY=a b' my-srv -- npx -y pkg"
+            "codex mcp add my-srv --env 'API_KEY=a b' -- npx -y pkg"
         );
         assert!(!inv[1].ignore_failure);
     }
@@ -236,7 +237,7 @@ mod tests {
         assert_eq!(inv[0].display(), "claude mcp remove --scope user my-srv");
         assert_eq!(
             inv[1].display(),
-            "claude mcp add --scope user -e 'API_KEY=a b' my-srv -- npx -y pkg"
+            "claude mcp add --scope user my-srv -e 'API_KEY=a b' -- npx -y pkg"
         );
     }
 
