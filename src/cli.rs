@@ -24,13 +24,29 @@ impl CliInvocation {
         }
     }
 
-    /// Human-readable, shell-quoted command line for previews and error messages.
+    /// Human-readable, shell-quoted command line for previews.
     pub fn display(&self) -> String {
-        std::iter::once(self.program.as_str())
-            .chain(self.args.iter().map(String::as_str))
-            .map(shell_quote)
-            .collect::<Vec<_>>()
-            .join(" ")
+        self.render(false)
+    }
+
+    /// Same as [`display`](Self::display) but with `-e` / `--env` values replaced by `***`,
+    /// so secrets never reach status messages or logs.
+    pub fn display_redacted(&self) -> String {
+        self.render(true)
+    }
+
+    fn render(&self, redact_env: bool) -> String {
+        let mut after_env_flag = false;
+        let mut parts = vec![shell_quote(&self.program)];
+        for arg in &self.args {
+            let value = match arg.split_once('=') {
+                Some((key, _)) if redact_env && after_env_flag => format!("{key}=***"),
+                _ => arg.clone(),
+            };
+            after_env_flag = matches!(arg.as_str(), "-e" | "--env");
+            parts.push(shell_quote(&value));
+        }
+        parts.join(" ")
     }
 }
 
@@ -168,7 +184,7 @@ fn run_subprocess(inv: &CliInvocation) -> Result<(), CliError> {
         stderr.trim().to_string()
     };
     Err(CliError::CommandFailed {
-        command: inv.display(),
+        command: inv.display_redacted(),
         message,
     })
 }
@@ -343,5 +359,49 @@ mod tests {
             find_in_dirs("mytool", [dir.path().to_path_buf()].into_iter()),
             Some(exe)
         );
+    }
+
+    #[test]
+    fn test_display_redacted_masks_only_env_values() {
+        let cases = [
+            // (args, display, display_redacted)
+            (
+                vec!["mcp", "add", "n", "-e", "K=secret", "--", "cmd", "A=b"],
+                "p mcp add n -e K=secret -- cmd A=b",
+                "p mcp add n -e 'K=***' -- cmd A=b",
+            ),
+            (
+                vec!["mcp", "add", "--env", "K=with space", "n", "--", "cmd"],
+                "p mcp add --env 'K=with space' n -- cmd",
+                "p mcp add --env 'K=***' n -- cmd",
+            ),
+            (
+                vec!["mcp", "add", "n", "--", "cmd"],
+                "p mcp add n -- cmd",
+                "p mcp add n -- cmd",
+            ),
+        ];
+
+        for (args, plain, redacted) in cases {
+            let inv = CliInvocation::new("p", args.iter().map(|a| a.to_string()).collect(), false);
+            assert_eq!(inv.display(), plain);
+            assert_eq!(inv.display_redacted(), redacted);
+        }
+    }
+
+    #[test]
+    fn test_command_failed_error_does_not_leak_env_values() {
+        let inv = CliInvocation::new(
+            "definitely-not-a-real-program",
+            vec![
+                "mcp".into(),
+                "add".into(),
+                "-e".into(),
+                "K=topsecret".into(),
+            ],
+            false,
+        );
+        let err = run_subprocess(&inv).unwrap_err().to_string();
+        assert!(!err.contains("topsecret"), "{err}");
     }
 }

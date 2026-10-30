@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- CLI 委譲ターゲットの実行失敗メッセージで、`-e` / `--env` の値を `***` に伏せるように（実行予定コマンドのプレビューは従来どおり実値を表示）
 - クリップボード自動読み取り（起動時・フォーカス獲得時）の判定を洗練: 有効な MCP 設定としてパースできる内容のみ入力欄へ取り込み、前回判定済みと同一の内容では編集中の入力を上書きしない（手動の読み取りボタン・`Ctrl+V` は従来どおり内容を問わず取り込む）
 - 「自動読み取り」トグルの設定を次回起動へ永続化（`eframe` の `persistence` 機能。ウィンドウ位置・サイズは保存しない）
 
@@ -18,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- スニペット内の `env` に残ったプレースホルダー（`YOUR_API_KEY`、`<token>`、`PASTE_HERE`、`TODO`、`xxxx` 等の伏せ字、空文字）を検知して警告表示し、左ペインのミニ入力欄で実値を入力・置換できるように（入力値は既定でマスク表示、プレビューと適用に反映。未入力のまま適用した場合はステータスに件数を警告）
 - 対応クライアントの拡充: Windsurf, Cline, Roo Code, Zed（AST 直接マージ）
 - 公式 CLI 委譲アダプター（`TargetAction::CliCommand`）: Claude Code / Codex / GitHub Copilot / Antigravity CLI を `mcp add` で登録し（Claude Code / Copilot は同名上書き不可のため事前に `mcp remove`）、実行予定コマンドを差分欄にプレビュー表示
 - キーボードショートカット操作のサポート（`Ctrl+V`: クリップボード再読み取り、`Ctrl+Enter`: 適用、`Esc`: ウィンドウ閉じる）および UI ヒント表示の追加

@@ -3,6 +3,9 @@ use crate::filter::{apply_filters, FilterOptions};
 use crate::merger::{detect_client_targets, merge_mcp_servers};
 use crate::model::{ClientTarget, McpServersMap, TargetAction};
 use crate::parser::parse_mcp_snippet;
+use crate::placeholder::{
+    fill_placeholders, find_placeholders, is_placeholder, EnvOverrides, EnvRef,
+};
 use crate::writer::safe_atomic_write;
 
 /// 各クライアント設定ターゲットの GUI 表示・状態
@@ -67,6 +70,12 @@ pub struct Clp2cfgApp {
     pub status_message: Option<(String, bool)>,
     /// 自動クリップボード読み取りトグル（次回起動へ永続化される）
     pub auto_read_clipboard: bool,
+    /// スニペット内のプレースホルダー env（入力済みのものも含む。入力欄を消さないため）
+    placeholder_fields: Vec<EnvRef>,
+    /// ミニ入力欄で入力された実値（シークレットを含むためログ・ステータスには出さない）
+    env_overrides: EnvOverrides,
+    /// 入力欄の値を平文で表示するか
+    reveal_env_inputs: bool,
     /// 前回クリップボードから取り込んだ（または判定した）内容。同一内容の再取込で編集中の入力を上書きしないために保持する
     last_clipboard_seen: Option<String>,
     /// 前回フレームでのウィンドウフォーカス状態
@@ -92,6 +101,9 @@ impl Clp2cfgApp {
             selected_target_idx: 0,
             status_message: None,
             auto_read_clipboard: true,
+            placeholder_fields: Vec::new(),
+            env_overrides: EnvOverrides::new(),
+            reveal_env_inputs: false,
             last_clipboard_seen: None,
             was_focused: false,
         }
@@ -150,6 +162,7 @@ impl Clp2cfgApp {
             return false;
         }
         self.raw_input = text.to_string();
+        self.env_overrides.clear();
         self.reparse();
         self.status_message = Some(("クリップボードから読み取りました".to_string(), false));
         true
@@ -168,6 +181,7 @@ impl Clp2cfgApp {
         let trimmed = self.raw_input.trim();
 
         if trimmed.is_empty() {
+            self.placeholder_fields.clear();
             self.parsed_config = Err("入力が空です".to_string());
             for entry in &mut self.target_entries {
                 entry.diff_preview = None;
@@ -182,10 +196,17 @@ impl Clp2cfgApp {
                     replace_npx_with_bunx: self.replace_npx_with_bunx,
                 };
 
-                let filtered_servers: McpServersMap = servers
+                let mut filtered_servers: McpServersMap = servers
                     .into_iter()
                     .map(|(k, v)| (k, apply_filters(v, &options)))
                     .collect();
+
+                self.placeholder_fields = find_placeholders(&filtered_servers);
+                fill_placeholders(
+                    &mut filtered_servers,
+                    &self.placeholder_fields,
+                    &self.env_overrides,
+                );
 
                 // 各ターゲットに対するマージプレビューを計算
                 for entry in &mut self.target_entries {
@@ -209,6 +230,7 @@ impl Clp2cfgApp {
                 ));
             }
             Err(err) => {
+                self.placeholder_fields.clear();
                 self.parsed_config = Err(format!("パースエラー: {}", err));
                 for entry in &mut self.target_entries {
                     entry.diff_preview = None;
@@ -216,6 +238,77 @@ impl Clp2cfgApp {
                 }
                 self.status_message = Some((format!("パース失敗: {}", err), true));
             }
+        }
+    }
+
+    /// 現在の設定（入力済みの実値を反映後）でもプレースホルダーのままの env の件数
+    pub fn unresolved_placeholder_count(&self) -> usize {
+        let Ok(servers) = &self.parsed_config else {
+            return 0;
+        };
+        self.placeholder_fields
+            .iter()
+            .filter(|r| {
+                servers
+                    .get(&r.server)
+                    .and_then(|c| c.env.get(&r.key))
+                    .is_some_and(|v| is_placeholder(v))
+            })
+            .count()
+    }
+
+    /// 未入力プレースホルダーの警告と、実値を入力するミニ入力欄を描画する
+    fn render_placeholder_inputs(&mut self, ui: &mut egui::Ui) {
+        if self.placeholder_fields.is_empty() {
+            return;
+        }
+
+        ui.add_space(8.0);
+        ui.separator();
+        let unresolved = self.unresolved_placeholder_count();
+        ui.horizontal(|ui| {
+            if unresolved > 0 {
+                ui.label(
+                    egui::RichText::new(format!("⚠ 未入力のプレースホルダー: {} 件", unresolved))
+                        .color(egui::Color32::YELLOW),
+                );
+            } else {
+                ui.label(
+                    egui::RichText::new("✓ プレースホルダーはすべて入力済み")
+                        .color(egui::Color32::LIGHT_GREEN),
+                );
+            }
+            ui.checkbox(&mut self.reveal_env_inputs, "値を表示");
+        });
+
+        let mut changed = false;
+        egui::ScrollArea::vertical()
+            .id_salt("placeholder_inputs")
+            .max_height(120.0)
+            .show(ui, |ui| {
+                for field in &self.placeholder_fields {
+                    let mut value = self.env_overrides.get(field).cloned().unwrap_or_default();
+                    ui.horizontal(|ui| {
+                        ui.label(format!("{} / {}", field.server, field.key));
+                        let response = ui.add(
+                            egui::TextEdit::singleline(&mut value)
+                                .password(!self.reveal_env_inputs)
+                                .hint_text("実値を入力")
+                                .desired_width(f32::INFINITY),
+                        );
+                        if response.changed() {
+                            if value.is_empty() {
+                                self.env_overrides.remove(field);
+                            } else {
+                                self.env_overrides.insert(field.clone(), value);
+                            }
+                            changed = true;
+                        }
+                    });
+                }
+            });
+        if changed {
+            self.reparse();
         }
     }
 
@@ -283,11 +376,21 @@ impl Clp2cfgApp {
 
         let prefix = if dry_run { "[Dry-Run] " } else { "" };
         if fail_targets.is_empty() {
+            let unresolved = self.unresolved_placeholder_count();
+            let warning = if unresolved > 0 {
+                format!(
+                    " ⚠ 未入力のプレースホルダーが {} 件残っています",
+                    unresolved
+                )
+            } else {
+                String::new()
+            };
             self.status_message = Some((
                 format!(
-                    "{}適用完了: {} 件 ({})",
+                    "{}適用完了: {} 件{} ({})",
                     prefix,
                     success_targets.len(),
+                    warning,
                     success_targets.join(", ")
                 ),
                 false,
@@ -380,6 +483,7 @@ impl Clp2cfgApp {
                     .clicked()
                 {
                     self.raw_input.clear();
+                    self.env_overrides.clear();
                     self.reparse();
                 }
 
@@ -396,24 +500,31 @@ impl Clp2cfgApp {
         });
 
         // ボトムバー（ステータス表示 & アクションボタン）
+        // 長いステータス（警告つき等）がボタンに隠れないよう、左側だけを縮める
+        let status = self.status_message.clone();
         egui::Panel::bottom("bottom_panel").show(ui, |ui| {
-            ui.horizontal(|ui| {
-                // 左側: ステータスメッセージ
-                if let Some((msg, is_err)) = &self.status_message {
-                    let color = if *is_err {
-                        egui::Color32::LIGHT_RED
+            egui::Sides::new().shrink_left().truncate().show(
+                ui,
+                |ui| {
+                    // 左側: ステータスメッセージ
+                    if let Some((msg, is_err)) = &status {
+                        let color = if *is_err {
+                            egui::Color32::LIGHT_RED
+                        } else {
+                            egui::Color32::LIGHT_GREEN
+                        };
+                        ui.label(egui::RichText::new(msg).color(color))
+                            .on_hover_text(msg);
                     } else {
-                        egui::Color32::LIGHT_GREEN
-                    };
-                    ui.label(egui::RichText::new(msg).color(color));
-                } else {
-                    ui.label(
-                        egui::RichText::new("スニペットを貼り付けてターゲットを選択してください")
+                        ui.label(
+                            egui::RichText::new(
+                                "スニペットを貼り付けてターゲットを選択してください",
+                            )
                             .color(egui::Color32::GRAY),
-                    );
-                }
-
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        );
+                    }
+                },
+                |ui| {
                     let can_apply = self.parsed_config.is_ok()
                         && self.target_entries.iter().any(|e| e.target.selected);
 
@@ -438,8 +549,8 @@ impl Clp2cfgApp {
                             .small()
                             .color(egui::Color32::GRAY),
                     );
-                });
-            });
+                },
+            );
         });
 
         // 左ペイン: 入力スニペット & パース概要
@@ -468,6 +579,8 @@ impl Clp2cfgApp {
                 if response.changed() {
                     self.reparse();
                 }
+
+                self.render_placeholder_inputs(ui);
 
                 ui.add_space(8.0);
                 ui.separator();
@@ -1083,5 +1196,83 @@ mod tests {
                 Some(enabled)
             );
         }
+    }
+
+    #[test]
+    fn test_placeholder_override_flow() {
+        const SNIPPET: &str = r#"{"mcpServers":{"gh":{"command":"npx","env":{"GITHUB_TOKEN":"YOUR_TOKEN","REGION":"us-east-1"}}}}"#;
+        let token = EnvRef {
+            server: "gh".to_string(),
+            key: "GITHUB_TOKEN".to_string(),
+        };
+        let token_value = |app: &Clp2cfgApp| {
+            app.parsed_config.as_ref().unwrap()["gh"].env["GITHUB_TOKEN"].clone()
+        };
+
+        let mut app = Clp2cfgApp::new_with_targets(Vec::new());
+        app.raw_input = SNIPPET.to_string();
+        app.reparse();
+
+        // 検知: プレースホルダーのみが対象
+        assert_eq!(app.placeholder_fields, vec![token.clone()]);
+        assert_eq!(app.unresolved_placeholder_count(), 1);
+        assert_eq!(token_value(&app), "YOUR_TOKEN");
+
+        // 実値の入力が parse 結果へ反映され、未入力件数が減る（入力欄は残る）
+        app.env_overrides
+            .insert(token.clone(), "ghp_real".to_string());
+        app.reparse();
+        assert_eq!(token_value(&app), "ghp_real");
+        assert_eq!(app.unresolved_placeholder_count(), 0);
+        assert_eq!(app.placeholder_fields, vec![token.clone()]);
+
+        // npx → bunx 切替などの再パースでも入力値は保持される
+        app.replace_npx_with_bunx = false;
+        app.reparse();
+        assert_eq!(token_value(&app), "ghp_real");
+
+        // クリップボードからの取り込みでは前回の入力値を引き継がない
+        let other = SNIPPET.replace("YOUR_TOKEN", "<token>");
+        assert!(app.load_clipboard_text(&other, false));
+        assert!(app.env_overrides.is_empty());
+        assert_eq!(token_value(&app), "<token>");
+        assert_eq!(app.unresolved_placeholder_count(), 1);
+    }
+
+    #[test]
+    fn test_placeholder_override_is_ignored_once_snippet_has_real_value() {
+        let token = EnvRef {
+            server: "gh".to_string(),
+            key: "T".to_string(),
+        };
+        let mut app = Clp2cfgApp::new_with_targets(Vec::new());
+        app.env_overrides.insert(token, "stale".to_string());
+        app.raw_input = r#"{"gh":{"command":"x","env":{"T":"real-value"}}}"#.to_string();
+        app.reparse();
+
+        assert!(app.placeholder_fields.is_empty());
+        assert_eq!(
+            app.parsed_config.as_ref().unwrap()["gh"].env["T"],
+            "real-value"
+        );
+    }
+
+    #[test]
+    fn test_apply_with_unresolved_placeholder_warns_without_leaking_values() {
+        let temp = tempdir().unwrap();
+        let target = make_test_target(temp.path(), ClientTargetKind::Cursor, "mcp.json");
+        let mut app = Clp2cfgApp::new_with_targets(vec![target]);
+        app.raw_input =
+            r#"{"gh":{"command":"x","env":{"A":"YOUR_KEY","B":"sk-secret-value"}}}"#.to_string();
+        app.reparse();
+        app.target_entries[0].target.selected = true;
+
+        app.apply_all(false);
+
+        let (msg, is_err) = app.status_message.clone().unwrap();
+        assert!(!is_err);
+        assert!(msg.contains("適用完了"), "{msg}");
+        assert!(msg.contains("未入力のプレースホルダーが 1 件"), "{msg}");
+        assert!(!msg.contains("sk-secret-value"), "{msg}");
     }
 }
