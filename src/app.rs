@@ -1,18 +1,23 @@
 use crate::cli::{build_cli_invocations, preview_invocations, run_invocations};
 use crate::filter::{apply_filters, FilterOptions};
-use crate::merger::{detect_client_targets, merge_mcp_servers};
+use crate::merger::{
+    classify_server_changes, detect_client_targets, merge_mcp_servers, ServerChange,
+};
 use crate::model::{ClientTarget, McpServersMap, TargetAction};
 use crate::parser::parse_mcp_snippet;
 use crate::placeholder::{
     fill_placeholders, find_placeholders, is_placeholder, EnvOverrides, EnvRef,
 };
 use crate::writer::safe_atomic_write;
+use std::collections::BTreeMap;
 
 /// 各クライアント設定ターゲットの GUI 表示・状態
 #[derive(Debug, Clone)]
 pub struct TargetEntry {
     pub target: ClientTarget,
     pub diff_preview: Option<String>,
+    /// サーバーごとの「新規追加 / 上書き / 変更なし」（ファイル系ターゲットのみ）
+    pub changes: Option<ServerChanges>,
     pub error: Option<String>,
 }
 
@@ -21,13 +26,52 @@ impl TargetEntry {
         Self {
             target,
             diff_preview: None,
+            changes: None,
             error: None,
         }
     }
+
+    /// 既存の定義を置き換えるサーバーの数
+    pub fn overwrite_count(&self) -> usize {
+        self.changes.as_ref().map_or(0, |changes| {
+            changes
+                .values()
+                .filter(|c| **c == ServerChange::Updated)
+                .count()
+        })
+    }
 }
 
-/// ターゲットへの適用予定内容（ファイルマージ結果 or 実行予定 CLI コマンド）を生成する
-fn build_preview(target: &ClientTarget, servers: &McpServersMap) -> Result<String, String> {
+/// サーバー名ごとの判定
+pub type ServerChanges = BTreeMap<String, ServerChange>;
+
+/// 判定の表示ラベルと色
+fn change_badge(change: ServerChange) -> (&'static str, egui::Color32) {
+    match change {
+        ServerChange::New => ("新規追加", egui::Color32::LIGHT_GREEN),
+        ServerChange::Updated => ("上書き", egui::Color32::YELLOW),
+        ServerChange::Unchanged => ("変更なし", egui::Color32::GRAY),
+    }
+}
+
+/// 判定ごとの件数の要約（例: `新規追加 1 件 / 上書き 2 件 / 変更なし 0 件`）
+fn change_summary(changes: &ServerChanges) -> String {
+    let count = |target: ServerChange| changes.values().filter(|c| **c == target).count();
+    format!(
+        "新規追加 {} 件 / 上書き {} 件 / 変更なし {} 件",
+        count(ServerChange::New),
+        count(ServerChange::Updated),
+        count(ServerChange::Unchanged)
+    )
+}
+
+/// ターゲットへの適用予定内容（ファイルマージ結果 or 実行予定 CLI コマンド）と、
+/// ファイル系ターゲットでのサーバーごとの判定（新規追加 / 上書き / 変更なし）を生成する。
+/// CLI 委譲ターゲットは既存の登録を事前に確認できないため、判定は `None`。
+fn build_preview_with_changes(
+    target: &ClientTarget,
+    servers: &McpServersMap,
+) -> Result<(String, Option<ServerChanges>), String> {
     match target.kind.action() {
         TargetAction::FileMerge => {
             let existing = if target.path.is_file() {
@@ -35,15 +79,24 @@ fn build_preview(target: &ClientTarget, servers: &McpServersMap) -> Result<Strin
             } else {
                 None
             };
-            merge_mcp_servers(target.kind, existing.as_deref(), servers).map_err(|e| e.to_string())
+            let merged = merge_mcp_servers(target.kind, existing.as_deref(), servers)
+                .map_err(|e| e.to_string())?;
+            let changes = classify_server_changes(target.kind, existing.as_deref(), servers)
+                .map_err(|e| e.to_string())?;
+            Ok((merged, Some(changes)))
         }
         TargetAction::CliCommand => {
             let program = target.path.to_string_lossy();
             build_cli_invocations(target.kind, &program, servers)
-                .map(|inv| preview_invocations(&inv))
+                .map(|inv| (preview_invocations(&inv), None))
                 .map_err(|e| e.to_string())
         }
     }
+}
+
+/// ターゲットへの適用予定内容だけが必要な場合（適用時）
+fn build_preview(target: &ClientTarget, servers: &McpServersMap) -> Result<String, String> {
+    build_preview_with_changes(target, servers).map(|(preview, _)| preview)
 }
 
 /// ターゲット一覧が右ペインの高さに占める上限の割合（残りは差分プレビューに使う）
@@ -191,6 +244,7 @@ impl Clp2cfgApp {
             self.parsed_config = Err("入力が空です".to_string());
             for entry in &mut self.target_entries {
                 entry.diff_preview = None;
+                entry.changes = None;
                 entry.error = None;
             }
             return;
@@ -217,13 +271,15 @@ impl Clp2cfgApp {
 
                 // 各ターゲットに対するマージプレビューを計算
                 for entry in &mut self.target_entries {
-                    match build_preview(&entry.target, &filtered_servers) {
-                        Ok(preview) => {
+                    match build_preview_with_changes(&entry.target, &filtered_servers) {
+                        Ok((preview, changes)) => {
                             entry.diff_preview = Some(preview);
+                            entry.changes = changes;
                             entry.error = None;
                         }
                         Err(err) => {
                             entry.diff_preview = None;
+                            entry.changes = None;
                             entry.error = Some(format!("マージプレビュー生成失敗: {}", err));
                         }
                     }
@@ -241,6 +297,7 @@ impl Clp2cfgApp {
                 self.parsed_config = Err(format!("パースエラー: {}", err));
                 for entry in &mut self.target_entries {
                     entry.diff_preview = None;
+                    entry.changes = None;
                     entry.error = None;
                 }
                 self.status_message = Some((format!("パース失敗: {}", err), true));
@@ -723,6 +780,15 @@ impl Clp2cfgApp {
                                 self.selected_target_idx = idx;
                             }
 
+                            let overwrites = entry.overwrite_count();
+                            if overwrites > 0 {
+                                ui.label(
+                                    egui::RichText::new(format!("⚠ 上書き {} 件", overwrites))
+                                        .small()
+                                        .color(egui::Color32::YELLOW),
+                                );
+                            }
+
                             // 長いパスが右ペインの幅を押し広げると、下のプレビューの折り返し幅も
                             // 見えている幅より広くなって見切れるため、残り幅で省略する
                             let path = entry.target.path.to_string_lossy();
@@ -756,6 +822,28 @@ impl Clp2cfgApp {
                             .color(egui::Color32::GRAY),
                     );
                 });
+
+                if let Some(changes) = &entry.changes {
+                    ui.label(egui::RichText::new(change_summary(changes)).small());
+                    ui.horizontal_wrapped(|ui| {
+                        for (name, change) in changes {
+                            let (label, color) = change_badge(*change);
+                            ui.label(egui::RichText::new(format!("[{}]", label)).color(color));
+                            ui.label(name);
+                            ui.add_space(8.0);
+                        }
+                    });
+                } else if entry.target.kind.action() == TargetAction::CliCommand
+                    && entry.diff_preview.is_some()
+                {
+                    ui.label(
+                        egui::RichText::new(
+                            "CLI 経由のため、既存の登録の有無は事前に確認できません（同名のサーバーは上書きされます）",
+                        )
+                        .small()
+                        .color(egui::Color32::GRAY),
+                    );
+                }
 
                 if let Some(error) = &entry.error {
                     ui.label(egui::RichText::new(error).color(egui::Color32::LIGHT_RED));
@@ -1494,5 +1582,69 @@ mod tests {
             right <= SCREEN_WIDTH,
             "コマンドが画面幅 {SCREEN_WIDTH} を超えて描画された: {right}"
         );
+    }
+
+    #[test]
+    fn test_target_entry_changes_follow_existing_file() {
+        let temp = tempdir().unwrap();
+        let path = temp.path().join("mcp.json");
+        std::fs::write(
+            &path,
+            r#"{"mcpServers":{"same":{"command":"node","args":["a"]},"diff":{"command":"old"}}}"#,
+        )
+        .unwrap();
+        let mut cli = ClientTarget::new_cli(ClientTargetKind::CodexCli, None);
+        cli.path = std::path::PathBuf::from("codex");
+
+        let mut app = Clp2cfgApp::new_with_targets(vec![
+            ClientTarget::new(ClientTargetKind::Cursor, path),
+            cli,
+        ]);
+        app.auto_read_clipboard = false;
+        app.replace_npx_with_bunx = false;
+        app.raw_input = r#"{"same":{"command":"node","args":["a"]},"diff":{"command":"new"},"fresh":{"command":"x"}}"#.to_string();
+        app.reparse();
+
+        let entry = &app.target_entries[0];
+        let changes = entry.changes.as_ref().unwrap();
+        assert_eq!(changes["same"], ServerChange::Unchanged);
+        assert_eq!(changes["diff"], ServerChange::Updated);
+        assert_eq!(changes["fresh"], ServerChange::New);
+        assert_eq!(entry.overwrite_count(), 1);
+        assert_eq!(
+            change_summary(changes),
+            "新規追加 1 件 / 上書き 1 件 / 変更なし 1 件"
+        );
+
+        // CLI 委譲ターゲットは既存の登録を確認できないので判定なし
+        assert!(app.target_entries[1].changes.is_none());
+        assert_eq!(app.target_entries[1].overwrite_count(), 0);
+
+        // 表示（一覧の警告・見出しのバッジ・CLI の注記）で panic しない
+        let ctx = egui::Context::default();
+        run_headless(&ctx, &mut app);
+        app.selected_target_idx = 1;
+        run_headless(&ctx, &mut app);
+
+        // 入力が無効になれば判定も消える
+        app.raw_input = "{ invalid".to_string();
+        app.reparse();
+        assert!(app.target_entries.iter().all(|e| e.changes.is_none()));
+        app.raw_input.clear();
+        app.reparse();
+        assert!(app.target_entries.iter().all(|e| e.changes.is_none()));
+    }
+
+    #[test]
+    fn test_change_badge_distinguishes_new_and_updated() {
+        let (new_label, new_color) = change_badge(ServerChange::New);
+        let (updated_label, updated_color) = change_badge(ServerChange::Updated);
+        let (unchanged_label, _) = change_badge(ServerChange::Unchanged);
+
+        assert_eq!(
+            [new_label, updated_label, unchanged_label],
+            ["新規追加", "上書き", "変更なし"]
+        );
+        assert_ne!(new_color, updated_color);
     }
 }
