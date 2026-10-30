@@ -1,6 +1,7 @@
+use crate::cli::{build_cli_invocations, preview_invocations, run_invocations};
 use crate::filter::{apply_filters, FilterOptions};
 use crate::merger::{detect_client_targets, merge_mcp_servers};
-use crate::model::{ClientTarget, McpServersMap};
+use crate::model::{ClientTarget, McpServersMap, TargetAction};
 use crate::parser::parse_mcp_snippet;
 use crate::writer::safe_atomic_write;
 
@@ -18,6 +19,26 @@ impl TargetEntry {
             target,
             diff_preview: None,
             error: None,
+        }
+    }
+}
+
+/// ターゲットへの適用予定内容（ファイルマージ結果 or 実行予定 CLI コマンド）を生成する
+fn build_preview(target: &ClientTarget, servers: &McpServersMap) -> Result<String, String> {
+    match target.kind.action() {
+        TargetAction::FileMerge => {
+            let existing = if target.path.is_file() {
+                std::fs::read_to_string(&target.path).ok()
+            } else {
+                None
+            };
+            merge_mcp_servers(target.kind, existing.as_deref(), servers).map_err(|e| e.to_string())
+        }
+        TargetAction::CliCommand => {
+            let program = target.path.to_string_lossy();
+            build_cli_invocations(target.kind, &program, servers)
+                .map(|inv| preview_invocations(&inv))
+                .map_err(|e| e.to_string())
         }
     }
 }
@@ -132,19 +153,9 @@ impl Clp2cfgApp {
 
                 // 各ターゲットに対するマージプレビューを計算
                 for entry in &mut self.target_entries {
-                    let existing_content = if entry.target.path.is_file() {
-                        std::fs::read_to_string(&entry.target.path).ok()
-                    } else {
-                        None
-                    };
-
-                    match merge_mcp_servers(
-                        entry.target.kind,
-                        existing_content.as_deref(),
-                        &filtered_servers,
-                    ) {
-                        Ok(merged_json_str) => {
-                            entry.diff_preview = Some(merged_json_str);
+                    match build_preview(&entry.target, &filtered_servers) {
+                        Ok(preview) => {
+                            entry.diff_preview = Some(preview);
                             entry.error = None;
                         }
                         Err(err) => {
@@ -202,31 +213,35 @@ impl Clp2cfgApp {
                 continue;
             }
 
-            let existing_content = if entry.target.path.is_file() {
-                std::fs::read_to_string(&entry.target.path).ok()
-            } else {
-                None
+            let result = match entry.target.kind.action() {
+                TargetAction::FileMerge => {
+                    build_preview(&entry.target, &servers).and_then(|merged| {
+                        if dry_run {
+                            return Ok(());
+                        }
+                        safe_atomic_write(&entry.target.path, &merged)
+                            .map_err(|e| e.to_string())
+                            .map(|_| entry.target.exists = true)
+                    })
+                }
+                TargetAction::CliCommand => {
+                    let program = entry.target.path.to_string_lossy();
+                    build_cli_invocations(entry.target.kind, &program, &servers)
+                        .and_then(|inv| {
+                            if dry_run {
+                                Ok(())
+                            } else {
+                                run_invocations(&inv)
+                            }
+                        })
+                        .map_err(|e| e.to_string())
+                }
             };
 
-            match merge_mcp_servers(entry.target.kind, existing_content.as_deref(), &servers) {
-                Ok(merged_json_str) => {
-                    if dry_run {
-                        success_targets.push(format!("{}(検証OK)", entry.target.name));
-                    } else {
-                        match safe_atomic_write(&entry.target.path, &merged_json_str) {
-                            Ok(_) => {
-                                entry.target.exists = true;
-                                success_targets.push(entry.target.name.clone());
-                            }
-                            Err(err) => {
-                                fail_targets.push(format!("{}: {}", entry.target.name, err));
-                            }
-                        }
-                    }
-                }
-                Err(err) => {
-                    fail_targets.push(format!("{}: {}", entry.target.name, err));
-                }
+            match result {
+                Ok(()) if dry_run => success_targets.push(format!("{}(検証OK)", entry.target.name)),
+                Ok(()) => success_targets.push(entry.target.name.clone()),
+                Err(err) => fail_targets.push(format!("{}: {}", entry.target.name, err)),
             }
         }
 
@@ -477,8 +492,13 @@ impl Clp2cfgApp {
                         ui.horizontal(|ui| {
                             ui.checkbox(&mut entry.target.selected, "");
 
-                            let exists = entry.target.path.exists();
-                            let badge = if exists {
+                            let exists = entry.target.exists;
+                            let is_cli = entry.target.kind.action() == TargetAction::CliCommand;
+                            let badge = if is_cli && exists {
+                                egui::RichText::new("[CLI検出]").color(egui::Color32::LIGHT_GREEN)
+                            } else if is_cli {
+                                egui::RichText::new("[CLI未検出]").color(egui::Color32::GRAY)
+                            } else if exists {
                                 egui::RichText::new("[既存]").color(egui::Color32::LIGHT_GREEN)
                             } else {
                                 egui::RichText::new("[新規]").color(egui::Color32::GRAY)
@@ -506,7 +526,11 @@ impl Clp2cfgApp {
             // 選択中ターゲットのマージ差分プレビュー
             if let Some(entry) = self.target_entries.get(self.selected_target_idx) {
                 ui.horizontal(|ui| {
-                    ui.heading(format!("マージプレビュー: {}", entry.target.name));
+                    let title = match entry.target.kind.action() {
+                        TargetAction::FileMerge => "マージプレビュー",
+                        TargetAction::CliCommand => "実行予定コマンド",
+                    };
+                    ui.heading(format!("{}: {}", title, entry.target.name));
                     ui.label(
                         egui::RichText::new(format!("({})", entry.target.path.display()))
                             .small()
@@ -759,6 +783,29 @@ mod tests {
 
         app.apply_all(false);
         assert!(app.status_message.as_ref().unwrap().1); // is_error = true
+    }
+
+    #[test]
+    fn test_app_cli_target_previews_command_and_dry_run_does_not_execute() {
+        let mut target = ClientTarget::new_cli(ClientTargetKind::CodexCli, None);
+        // 存在しないバイナリ: 実実行なら失敗し、Dry-Run なら実行されない
+        target.path = std::path::PathBuf::from("clp2cfg-nonexistent-binary");
+        target.selected = true;
+        let mut app = Clp2cfgApp::new_with_targets(vec![target]);
+        app.raw_input =
+            r#"{"mcpServers":{"fetch":{"command":"uvx","args":["mcp-server-fetch"]}}}"#.to_string();
+        app.reparse();
+
+        let preview = app.target_entries[0].diff_preview.as_ref().unwrap();
+        assert!(preview.contains("clp2cfg-nonexistent-binary mcp remove fetch"));
+        assert!(preview.contains("mcp add fetch -- uvx mcp-server-fetch"));
+
+        app.apply_all(true);
+        assert!(!app.status_message.as_ref().unwrap().1);
+
+        app.apply_all(false);
+        let (msg, is_err) = app.status_message.as_ref().unwrap();
+        assert!(*is_err, "{msg}");
     }
 
     /// 描画結果は検証しないため、egui 0.37 の未適用 TexturesDelta 検査を避けて破棄する
