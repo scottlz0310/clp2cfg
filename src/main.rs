@@ -16,6 +16,7 @@ fn main() -> eframe::Result<()> {
 
     let native_options = eframe::NativeOptions {
         viewport,
+        persist_window: false,
         ..Default::default()
     };
 

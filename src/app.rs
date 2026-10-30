@@ -43,6 +43,9 @@ fn build_preview(target: &ClientTarget, servers: &McpServersMap) -> Result<Strin
     }
 }
 
+/// 自動読み取りトグルの永続化キー
+const AUTO_READ_STORAGE_KEY: &str = "auto_read_clipboard";
+
 /// Windows 等で並行テスト実行時に OLE/COM クリップボードの同時初期化によるヒープ破損を防ぐためのロック
 static CLIPBOARD_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
@@ -62,10 +65,10 @@ pub struct Clp2cfgApp {
     pub selected_target_idx: usize,
     /// 操作結果ステータスメッセージ (メッセージ, is_error)
     pub status_message: Option<(String, bool)>,
-    /// 起動時のクリップボード読み取りが完了したか
-    initial_clipboard_read: bool,
-    /// 自動クリップボード読み取りトグル
+    /// 自動クリップボード読み取りトグル（次回起動へ永続化される）
     pub auto_read_clipboard: bool,
+    /// 前回クリップボードから取り込んだ（または判定した）内容。同一内容の再取込で編集中の入力を上書きしないために保持する
+    last_clipboard_seen: Option<String>,
     /// 前回フレームでのウィンドウフォーカス状態
     pub was_focused: bool,
 }
@@ -88,35 +91,68 @@ impl Clp2cfgApp {
             target_entries,
             selected_target_idx: 0,
             status_message: None,
-            initial_clipboard_read: false,
             auto_read_clipboard: true,
+            last_clipboard_seen: None,
             was_focused: false,
         }
     }
 
-    /// eframe 用のコンストラクタ（起動時にフォント設定およびクリップボード自動読み取りを試みる）
+    /// eframe 用のコンストラクタ（フォント設定、保存済みトグルの復元、起動時のクリップボード自動読み取り）
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         setup_system_fonts(&cc.egui_ctx);
         let mut app = Self::default();
+        if let Some(enabled) = cc
+            .storage
+            .and_then(|s| eframe::get_value(s, AUTO_READ_STORAGE_KEY))
+        {
+            app.auto_read_clipboard = enabled;
+        }
         if app.auto_read_clipboard {
-            app.read_from_clipboard();
-            app.initial_clipboard_read = true;
+            app.auto_read_from_clipboard();
         }
         app
     }
 
-    /// OS クリップボードから文字列を読み取り、入力欄に展開してパースする
+    /// 手動操作（ボタン・Ctrl+V）用: OS クリップボードの文字列を内容を問わず入力欄に展開してパースする
     pub fn read_from_clipboard(&mut self) -> bool {
-        if let Some(text) = Self::get_clipboard_text() {
-            let trimmed = text.trim();
-            if !trimmed.is_empty() && trimmed != self.raw_input.trim() {
-                self.raw_input = text;
-                self.reparse();
-                self.status_message = Some(("クリップボードから読み取りました".to_string(), false));
-                return true;
-            }
+        match Self::get_clipboard_text() {
+            Some(text) => self.load_clipboard_text(&text, false),
+            None => false,
         }
-        false
+    }
+
+    /// 自動読み取り用（起動時・フォーカス獲得時）
+    pub fn auto_read_from_clipboard(&mut self) -> bool {
+        match Self::get_clipboard_text() {
+            Some(text) => self.load_clipboard_text(&text, true),
+            None => false,
+        }
+    }
+
+    /// クリップボード文字列を入力欄へ取り込む。
+    ///
+    /// `only_valid_mcp` が真（自動読み取り）の場合、前回判定済みの内容と同一、または
+    /// MCP 設定としてパースできない内容は取り込まない。意図しない内容の表示と、
+    /// 編集中の入力の上書きを避けるため。
+    fn load_clipboard_text(&mut self, text: &str, only_valid_mcp: bool) -> bool {
+        let trimmed = text.trim();
+        if trimmed.is_empty() {
+            return false;
+        }
+        if only_valid_mcp && self.last_clipboard_seen.as_deref() == Some(trimmed) {
+            return false;
+        }
+        self.last_clipboard_seen = Some(trimmed.to_string());
+        if only_valid_mcp && parse_mcp_snippet(text).is_err() {
+            return false;
+        }
+        if trimmed == self.raw_input.trim() {
+            return false;
+        }
+        self.raw_input = text.to_string();
+        self.reparse();
+        self.status_message = Some(("クリップボードから読み取りました".to_string(), false));
+        true
     }
 
     /// OS クリップボードの文字列を取得
@@ -314,7 +350,7 @@ impl Clp2cfgApp {
         // ウィンドウフォーカス獲得時の自動クリップボード同期
         let is_focused = ui.input(|i| i.focused);
         if is_focused && !self.was_focused && self.auto_read_clipboard {
-            self.read_from_clipboard();
+            self.auto_read_from_clipboard();
         }
         self.was_focused = is_focused;
 
@@ -567,6 +603,15 @@ impl Clp2cfgApp {
 impl eframe::App for Clp2cfgApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.render_ui(ui);
+    }
+
+    fn save(&mut self, storage: &mut dyn eframe::Storage) {
+        eframe::set_value(storage, AUTO_READ_STORAGE_KEY, &self.auto_read_clipboard);
+    }
+
+    /// スクロール位置等の egui 内部状態は復元不要。保存対象は自動読み取りトグルのみとする
+    fn persist_egui_memory(&self) -> bool {
+        false
     }
 }
 
@@ -938,5 +983,105 @@ mod tests {
         // テキストボックスフォーカスなしでの描画実行でパニックせず完了することを確認
         let mut output = ctx.run_ui(raw_input, |ui| app.render_ui(ui));
         output.textures_delta.clear();
+    }
+
+    #[test]
+    fn test_load_clipboard_text_policy() {
+        const VALID: &str = r#"{"mcpServers":{"a":{"command":"echo"}}}"#;
+        const VALID_OTHER: &str = r#"{"mcpServers":{"b":{"command":"echo"}}}"#;
+
+        struct Case {
+            clip: &'static str,
+            only_valid: bool,
+            seen: Option<&'static str>,
+            raw: &'static str,
+            expected: bool,
+            after: &'static str,
+        }
+        let case = |clip, only_valid, seen, raw, expected, after| Case {
+            clip,
+            only_valid,
+            seen,
+            raw,
+            expected,
+            after,
+        };
+
+        let cases = [
+            // 自動: 有効な MCP 設定は取り込む
+            case(VALID, true, None, "", true, VALID),
+            // 自動: 非 MCP テキスト（パスワード等）は取り込まない
+            case("hunter2", true, None, "", false, ""),
+            // 自動: 空白のみは取り込まない
+            case(
+                "  
+", true, None, "", false, "",
+            ),
+            // 自動: 前回と同一内容なら編集中の入力を上書きしない
+            case(VALID, true, Some(VALID), "edited", false, "edited"),
+            // 自動: 別の有効な内容なら取り込む
+            case(VALID_OTHER, true, Some(VALID), "edited", true, VALID_OTHER),
+            // 手動: 非 MCP テキストでも取り込む
+            case("hunter2", false, None, "", true, "hunter2"),
+            // 手動: 前回と同一内容でも取り込む
+            case(VALID, false, Some(VALID), "edited", true, VALID),
+            // 手動: 入力欄と同一内容なら何もしない
+            case(VALID, false, None, VALID, false, VALID),
+        ];
+
+        for c in cases {
+            let mut app = Clp2cfgApp::new_with_targets(Vec::new());
+            app.last_clipboard_seen = c.seen.map(str::to_string);
+            app.raw_input = c.raw.to_string();
+
+            assert_eq!(
+                app.load_clipboard_text(c.clip, c.only_valid),
+                c.expected,
+                "clip={:?} only_valid={} seen={:?} raw={:?}",
+                c.clip,
+                c.only_valid,
+                c.seen,
+                c.raw
+            );
+            assert_eq!(app.raw_input, c.after, "clip={:?}", c.clip);
+        }
+    }
+
+    #[test]
+    fn test_auto_read_skips_non_mcp_then_does_not_retry_same_content() {
+        let mut app = Clp2cfgApp::new_with_targets(Vec::new());
+        assert!(!app.load_clipboard_text("not json", true));
+        // 一度判定した内容は記録され、手動読み取りでは取り込める
+        assert_eq!(app.last_clipboard_seen.as_deref(), Some("not json"));
+        assert!(app.load_clipboard_text("not json", false));
+    }
+
+    #[test]
+    fn test_save_persists_auto_read_toggle() {
+        #[derive(Default)]
+        struct MemStorage(std::collections::HashMap<String, String>);
+        impl eframe::Storage for MemStorage {
+            fn get_string(&self, key: &str) -> Option<String> {
+                self.0.get(key).cloned()
+            }
+            fn set_string(&mut self, key: &str, value: String) {
+                self.0.insert(key.to_string(), value);
+            }
+            fn remove_string(&mut self, key: &str) {
+                self.0.remove(key);
+            }
+            fn flush(&mut self) {}
+        }
+
+        for enabled in [true, false] {
+            let mut app = Clp2cfgApp::new_with_targets(Vec::new());
+            app.auto_read_clipboard = enabled;
+            let mut storage = MemStorage::default();
+            eframe::App::save(&mut app, &mut storage);
+            assert_eq!(
+                eframe::get_value::<bool>(&storage, AUTO_READ_STORAGE_KEY),
+                Some(enabled)
+            );
+        }
     }
 }

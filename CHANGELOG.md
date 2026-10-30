@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- クリップボード自動読み取り（起動時・フォーカス獲得時）の判定を洗練: 有効な MCP 設定としてパースできる内容のみ入力欄へ取り込み、前回判定済みと同一の内容では編集中の入力を上書きしない（手動の読み取りボタン・`Ctrl+V` は従来どおり内容を問わず取り込む）
+- 「自動読み取り」トグルの設定を次回起動へ永続化（`eframe` の `persistence` 機能。ウィンドウ位置・サイズは保存しない）
+
 ### Removed
 
 - 実在しない `~/.codex/config.json` への Codex ファイルマージターゲットを削除（Codex は `config.toml` を使うため、CLI 委譲ターゲットに一本化）
