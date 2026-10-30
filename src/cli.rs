@@ -74,8 +74,8 @@ pub fn build_cli_invocations(
     Ok(invocations)
 }
 
-/// Verified on real CLIs: `claude mcp add` rejects an existing name; `codex mcp add` and
-/// `agy mcp add` upsert. Copilot is unverified, so it takes the safe path (remove first).
+/// Verified on real CLIs: `claude mcp add` and `copilot mcp add` reject an existing name;
+/// `codex mcp add` and `agy mcp add` upsert.
 fn needs_remove_before_add(kind: ClientTargetKind) -> bool {
     matches!(
         kind,
