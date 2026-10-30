@@ -47,8 +47,9 @@ fn shell_quote(s: &str) -> String {
 
 /// Build the commands that register `servers` through the client's official CLI.
 ///
-/// Each server is registered as `remove` (failure ignored) followed by `add`, because
-/// the CLIs do not support overwriting a same-named server in place.
+/// CLIs whose `mcp add` rejects an existing name get a `remove` (failure ignored) first;
+/// CLIs that upsert natively (Codex, Antigravity) run `add` alone, so a failed `add`
+/// never leaves the previous definition removed.
 /// Properties other than `command` / `args` / `env` cannot be expressed through the CLIs.
 pub fn build_cli_invocations(
     kind: ClientTargetKind,
@@ -61,7 +62,9 @@ pub fn build_cli_invocations(
 
     let mut invocations = Vec::new();
     for (name, config) in servers {
-        invocations.push(CliInvocation::new(program, remove_args(kind, name), true));
+        if needs_remove_before_add(kind) {
+            invocations.push(CliInvocation::new(program, remove_args(kind, name), true));
+        }
         invocations.push(CliInvocation::new(
             program,
             add_args(kind, name, config),
@@ -69,6 +72,15 @@ pub fn build_cli_invocations(
         ));
     }
     Ok(invocations)
+}
+
+/// Verified on real CLIs: `claude mcp add` rejects an existing name; `codex mcp add` and
+/// `agy mcp add` upsert. Copilot is unverified, so it takes the safe path (remove first).
+fn needs_remove_before_add(kind: ClientTargetKind) -> bool {
+    matches!(
+        kind,
+        ClientTargetKind::ClaudeCli | ClientTargetKind::CopilotCli
+    )
 }
 
 fn remove_args(kind: ClientTargetKind, name: &str) -> Vec<String> {
@@ -85,18 +97,23 @@ fn add_args(kind: ClientTargetKind, name: &str, config: &NormalizedServerConfig)
     if kind == ClientTargetKind::ClaudeCli {
         args.extend(["--scope".into(), "user".into()]);
     }
-    // `claude mcp add` の `-e` は可変長引数のため、name を先に置かないと name が env として解釈される
-    args.push(name.to_string());
-    for (k, v) in &config.env {
-        args.push(
-            if kind == ClientTargetKind::ClaudeCli {
-                "-e"
-            } else {
-                "--env"
-            }
-            .into(),
-        );
-        args.push(format!("{k}={v}"));
+    // claude/codex/copilot: name は env フラグより前 (claude の `-e` は可変長で name を飲み込む)
+    // agy: フラグは name より前に置く必要がある
+    let env_flag = if kind == ClientTargetKind::ClaudeCli {
+        "-e"
+    } else {
+        "--env"
+    };
+    let env_args = config
+        .env
+        .iter()
+        .flat_map(|(k, v)| [env_flag.to_string(), format!("{k}={v}")]);
+    if kind == ClientTargetKind::AntigravityCli {
+        args.extend(env_args);
+        args.push(name.to_string());
+    } else {
+        args.push(name.to_string());
+        args.extend(env_args);
     }
     args.push("--".into());
     args.push(config.command.clone());
@@ -219,21 +236,32 @@ mod tests {
     }
 
     #[test]
-    fn test_build_codex_remove_then_add() {
+    fn test_build_codex_upserts_without_remove() {
         let inv = build_cli_invocations(ClientTargetKind::CodexCli, "codex", &servers()).unwrap();
-        assert_eq!(inv.len(), 2);
-        assert_eq!(inv[0].display(), "codex mcp remove my-srv");
-        assert!(inv[0].ignore_failure);
+        assert_eq!(inv.len(), 1);
         assert_eq!(
-            inv[1].display(),
+            inv[0].display(),
             "codex mcp add my-srv --env 'API_KEY=a b' -- npx -y pkg"
         );
-        assert!(!inv[1].ignore_failure);
+        assert!(!inv[0].ignore_failure);
+    }
+
+    #[test]
+    fn test_build_agy_puts_flags_before_name_without_remove() {
+        let inv =
+            build_cli_invocations(ClientTargetKind::AntigravityCli, "agy", &servers()).unwrap();
+        assert_eq!(inv.len(), 1);
+        assert_eq!(
+            inv[0].display(),
+            "agy mcp add --env 'API_KEY=a b' my-srv -- npx -y pkg"
+        );
     }
 
     #[test]
     fn test_build_claude_uses_user_scope_and_short_env_flag() {
         let inv = build_cli_invocations(ClientTargetKind::ClaudeCli, "claude", &servers()).unwrap();
+        assert_eq!(inv.len(), 2);
+        assert!(inv[0].ignore_failure);
         assert_eq!(inv[0].display(), "claude mcp remove --scope user my-srv");
         assert_eq!(
             inv[1].display(),
@@ -242,11 +270,13 @@ mod tests {
     }
 
     #[test]
-    fn test_build_copilot_and_agy_programs() {
+    fn test_build_copilot_removes_then_adds() {
         let c = build_cli_invocations(ClientTargetKind::CopilotCli, "copilot", &servers()).unwrap();
-        assert!(c[1].display().starts_with("copilot mcp add "));
-        let a = build_cli_invocations(ClientTargetKind::AntigravityCli, "agy", &servers()).unwrap();
-        assert!(a[1].display().starts_with("agy mcp add "));
+        assert_eq!(c[0].display(), "copilot mcp remove my-srv");
+        assert_eq!(
+            c[1].display(),
+            "copilot mcp add my-srv --env 'API_KEY=a b' -- npx -y pkg"
+        );
     }
 
     #[test]
@@ -257,7 +287,7 @@ mod tests {
 
     #[test]
     fn test_run_ignores_remove_failure_but_stops_on_add_failure() {
-        let inv = build_cli_invocations(ClientTargetKind::CodexCli, "codex", &servers()).unwrap();
+        let inv = build_cli_invocations(ClientTargetKind::ClaudeCli, "claude", &servers()).unwrap();
         let fail = |i: &CliInvocation| -> Result<(), CliError> {
             Err(CliError::CommandFailed {
                 command: i.display(),

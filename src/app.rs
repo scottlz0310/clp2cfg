@@ -797,7 +797,7 @@ mod tests {
         app.reparse();
 
         let preview = app.target_entries[0].diff_preview.as_ref().unwrap();
-        assert!(preview.contains("clp2cfg-nonexistent-binary mcp remove fetch"));
+        assert!(!preview.contains("mcp remove"), "codex upserts natively");
         assert!(preview.contains("mcp add fetch -- uvx mcp-server-fetch"));
 
         app.apply_all(true);
