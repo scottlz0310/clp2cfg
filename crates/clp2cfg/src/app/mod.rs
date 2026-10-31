@@ -249,28 +249,36 @@ mod tests {
     }
 
     #[test]
-    fn test_shortcut_ctrl_v_when_not_focused() {
+    fn test_shortcut_ctrl_v_reads_the_clipboard_when_no_text_box_has_focus() {
         let temp = tempdir().unwrap();
         let target = make_test_target(temp.path(), ClientTargetKind::Claude, "claude.json");
-        let mut app = new_app(vec![target]);
+        let clipboard = FakeClipboard::default();
+        clipboard.set(Some(r#"{"mcpServers":{"pasted":{"command":"node"}}}"#));
+        let mut app = Clp2cfgApp::with_ports(
+            vec![target],
+            Box::new(SystemIo),
+            Box::new(clipboard.clone()),
+        );
+        app.state.auto_read_clipboard = false;
         let ctx = egui::Context::default();
 
+        // 実機では、Ctrl+V はキーイベントではなく貼り付けイベントとして届く
         let mut raw_input = egui::RawInput::default();
-        let modifiers = egui::Modifiers {
-            ctrl: true,
-            ..Default::default()
-        };
-        raw_input.events.push(egui::Event::Key {
-            key: egui::Key::V,
-            physical_key: None,
-            pressed: true,
-            repeat: false,
-            modifiers,
-        });
-
-        // テキストボックスフォーカスなしでの描画実行でパニックせず完了することを確認
+        raw_input
+            .events
+            .push(egui::Event::Paste("clipboard text".to_string()));
         let mut output = ctx.run_ui(raw_input, |ui| app.render_ui(ui));
         output.textures_delta.clear();
+
+        assert!(
+            app.state.raw_input.contains("pasted"),
+            "{}",
+            app.state.raw_input
+        );
+        assert_eq!(
+            app.state.status_message,
+            Some(("クリップボードから読み取りました".to_string(), false))
+        );
     }
 
     #[test]
