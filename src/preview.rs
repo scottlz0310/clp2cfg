@@ -1,8 +1,8 @@
 //! Preview of what applying a snippet to a target would do (file merge result or CLI commands).
 
-use crate::cli::{build_cli_invocations, preview_invocations};
+use crate::delegate::plan::{build_cli_invocations, preview_invocations};
 use crate::domain::{ClientTarget, McpServersMap, ServerChange, TargetAction};
-use crate::merger::{classify_server_changes, merge_mcp_servers};
+use crate::merge::{classify_server_changes, merge_mcp_servers};
 use std::collections::BTreeMap;
 
 /// サーバー名ごとの判定
@@ -77,7 +77,7 @@ mod tests {
             let dir = tempdir().unwrap();
             let path = dir.path().join(".mcp.json");
             std::fs::write(&path, &bytes).unwrap();
-            let target = ClientTarget::new(ClientTargetKind::Project, path.clone());
+            let target = crate::discovery::file_target(ClientTargetKind::Project, path.clone());
 
             let err = build_preview_with_changes(&target, &servers()).unwrap_err();
 
@@ -92,7 +92,8 @@ mod tests {
     #[test]
     fn test_missing_file_is_previewed_as_new() {
         let dir = tempdir().unwrap();
-        let target = ClientTarget::new(ClientTargetKind::Project, dir.path().join(".mcp.json"));
+        let target =
+            crate::discovery::file_target(ClientTargetKind::Project, dir.path().join(".mcp.json"));
 
         let (preview, changes) = build_preview_with_changes(&target, &servers()).unwrap();
 
@@ -105,7 +106,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let path = dir.path().join(".mcp.json");
         std::fs::write(&path, r#"{"mcpServers":{"keep-me":{"command":"node"}}}"#).unwrap();
-        let target = ClientTarget::new(ClientTargetKind::Project, path);
+        let target = crate::discovery::file_target(ClientTargetKind::Project, path);
 
         let (preview, _) = build_preview_with_changes(&target, &servers()).unwrap();
 

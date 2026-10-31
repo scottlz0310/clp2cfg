@@ -227,7 +227,7 @@ mod tests {
         assert_eq!(ClientTargetKind::from_cli_name("nope"), None);
 
         // 検出されるターゲットはすべて名前を持つ（ALL の登録漏れ防止）
-        for target in crate::merger::detect_client_targets(None) {
+        for target in crate::discovery::detect_client_targets(None) {
             assert!(ClientTargetKind::ALL.contains(&target.kind));
         }
     }

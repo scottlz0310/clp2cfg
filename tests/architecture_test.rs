@@ -92,8 +92,11 @@ const FILE_LAYERS: &[(&str, Layer)] = &[
     ("parser", Layer::Pure),
     ("filter", Layer::Pure),
     ("placeholder", Layer::Pure),
-    ("merger", Layer::Pure),
-    ("cli", Layer::Platform),
+    ("merge", Layer::Pure),
+    ("delegate", Layer::Pure),
+    ("delegate::plan", Layer::Pure),
+    ("discovery", Layer::Platform),
+    ("delegate::exec", Layer::Platform),
     ("writer", Layer::Platform),
     ("undo", Layer::Platform),
     ("preview", Layer::Apply),
@@ -155,31 +158,6 @@ struct Allowed {
 /// 現状の違反。解消した PR が、その行を削除する。
 const ALLOWLIST: &[Allowed] = &[
     Allowed {
-        key: "domain::client -> .is_file()",
-        reason: "ClientTarget::new / new_cli が存在判定のためにファイルシステムを見る",
-        issue: "#62",
-    },
-    Allowed {
-        key: "merger -> crate::cli",
-        reason: "クライアント検出が cli の PATH 探索に依存している（検出が JSON マージと同居）",
-        issue: "#62",
-    },
-    Allowed {
-        key: "merger -> dirs",
-        reason: "クライアント検出が OS の設定ディレクトリを調べる",
-        issue: "#62",
-    },
-    Allowed {
-        key: "merger -> std::env",
-        reason: "クライアント検出がカレントディレクトリを調べる",
-        issue: "#62",
-    },
-    Allowed {
-        key: "merger -> .is_file()",
-        reason: "クライアント検出が mcp.json の有無を調べる",
-        issue: "#62",
-    },
-    Allowed {
         key: "preview -> std::fs",
         reason: "プレビューの生成が既存ファイルを直接読む（port 経由にする）",
         issue: "#64",
@@ -190,8 +168,8 @@ const ALLOWLIST: &[Allowed] = &[
         issue: "#64",
     },
     Allowed {
-        key: "app -> crate::cli",
-        reason: "GUI が CLI コマンドの生成・実行を直接呼ぶ（ユースケースを通す）",
+        key: "app -> crate::delegate::exec",
+        reason: "GUI が CLI コマンドの実行を直接呼ぶ（ユースケースを通す）",
         issue: "#64",
     },
     Allowed {
@@ -200,14 +178,25 @@ const ALLOWLIST: &[Allowed] = &[
         issue: "#64",
     },
     Allowed {
+        key: "app -> crate::discovery",
+        reason: "GUI がクライアント検出を直接呼ぶ（検出は entry が行い、frontend へ渡す）",
+        issue: "#66",
+    },
+    Allowed {
         key: "headless -> crate::writer",
         reason: "ヘッドレス実行が原子書き込みを直接呼ぶ（ユースケースを通す）",
         issue: "#64",
     },
     Allowed {
-        key: "headless -> crate::cli",
-        reason: "ヘッドレス実行が CLI コマンドの生成・実行を直接呼ぶ（ユースケースを通す）",
+        key: "headless -> crate::delegate::exec",
+        reason: "ヘッドレス実行が CLI コマンドの実行を直接呼ぶ（ユースケースを通す）",
         issue: "#64",
+    },
+    Allowed {
+        key: "headless -> crate::discovery",
+        reason:
+            "ヘッドレス実行がクライアント検出を直接呼ぶ（検出は entry が行い、frontend へ渡す）",
+        issue: "#65",
     },
     Allowed {
         key: "headless -> crate::args",
