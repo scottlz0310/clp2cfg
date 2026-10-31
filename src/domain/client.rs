@@ -147,3 +147,117 @@ impl ClientTarget {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::BTreeSet;
+
+    /// 全クライアントの識別子・表示名・適用方法・CLI 名を固定する。
+    /// クライアントを足したら、ここにも 1 行足す（`ALL` の足し忘れもここで気付く）。
+    #[test]
+    fn test_every_client_keeps_its_identity() {
+        use ClientTargetKind::*;
+        // (種類, --target の名前, 表示名, 適用方法, CLI の実行ファイル)
+        let expected = [
+            (
+                Claude,
+                "claude",
+                "Claude Code / Desktop",
+                TargetAction::FileMerge,
+                None,
+            ),
+            (Cursor, "cursor", "Cursor", TargetAction::FileMerge, None),
+            (
+                VsCode,
+                "vscode",
+                "VS Code Copilot",
+                TargetAction::FileMerge,
+                None,
+            ),
+            (
+                Project,
+                "project",
+                "Project Local (.mcp.json)",
+                TargetAction::FileMerge,
+                None,
+            ),
+            (
+                Windsurf,
+                "windsurf",
+                "Windsurf",
+                TargetAction::FileMerge,
+                None,
+            ),
+            (
+                Cline,
+                "cline",
+                "Cline (VS Code)",
+                TargetAction::FileMerge,
+                None,
+            ),
+            (
+                RooCode,
+                "roo-code",
+                "Roo Code (VS Code)",
+                TargetAction::FileMerge,
+                None,
+            ),
+            (Zed, "zed", "Zed", TargetAction::FileMerge, None),
+            (
+                ClaudeCli,
+                "claude-cli",
+                "Claude Code CLI",
+                TargetAction::CliCommand,
+                Some("claude"),
+            ),
+            (
+                CodexCli,
+                "codex-cli",
+                "Codex CLI",
+                TargetAction::CliCommand,
+                Some("codex"),
+            ),
+            (
+                CopilotCli,
+                "copilot-cli",
+                "GitHub Copilot CLI",
+                TargetAction::CliCommand,
+                Some("copilot"),
+            ),
+            (
+                AntigravityCli,
+                "antigravity-cli",
+                "Antigravity CLI",
+                TargetAction::CliCommand,
+                Some("agy"),
+            ),
+        ];
+
+        assert_eq!(
+            expected.map(|(kind, ..)| kind),
+            ClientTargetKind::ALL,
+            "ALL は表示順に全種類を持つ"
+        );
+        for (kind, cli_name, display_name, action, program) in expected {
+            assert_eq!(kind.cli_name(), cli_name);
+            assert_eq!(kind.display_name(), display_name);
+            assert_eq!(kind.action(), action, "{kind:?}");
+            assert_eq!(kind.cli_program(), program, "{kind:?}");
+            assert_eq!(ClientTargetKind::from_cli_name(cli_name), Some(kind));
+        }
+        assert_eq!(ClientTargetKind::from_cli_name("unknown"), None);
+    }
+
+    #[test]
+    fn test_cli_names_and_display_names_are_unique() {
+        let cli_names: BTreeSet<_> = ClientTargetKind::ALL.iter().map(|k| k.cli_name()).collect();
+        let display_names: BTreeSet<_> = ClientTargetKind::ALL
+            .iter()
+            .map(|k| k.display_name())
+            .collect();
+
+        assert_eq!(cli_names.len(), ClientTargetKind::ALL.len());
+        assert_eq!(display_names.len(), ClientTargetKind::ALL.len());
+    }
+}

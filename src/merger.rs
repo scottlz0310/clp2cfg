@@ -390,6 +390,57 @@ mod tests {
         assert_eq!(val["context_servers"]["srv"]["command"], "uvx");
     }
 
+    /// ファイル種ごとの違い（設定キー / JSONC を許すか / `type: stdio` を補うか）を全種類で固定する
+    #[test]
+    fn test_file_targets_keep_their_servers_key_and_quirks() {
+        // (種類, 設定キー, 既存の JSONC を許す, "type": "stdio" を補う)
+        let cases = [
+            (ClientTargetKind::Claude, "mcpServers", false, true),
+            (ClientTargetKind::Cursor, "mcpServers", false, false),
+            (
+                ClientTargetKind::VsCode,
+                "github.copilot.chat.mcp",
+                false,
+                false,
+            ),
+            (ClientTargetKind::Project, "mcpServers", false, false),
+            (ClientTargetKind::Windsurf, "mcpServers", false, false),
+            (ClientTargetKind::Cline, "mcpServers", false, false),
+            (ClientTargetKind::RooCode, "mcpServers", false, false),
+            (ClientTargetKind::Zed, "context_servers", true, false),
+        ];
+        let mut servers = McpServersMap::new();
+        servers.insert("srv".to_string(), create_dummy_server("npx"));
+
+        for (kind, key, allows_jsonc, adds_stdio_type) in cases {
+            let merged: Value =
+                serde_json::from_str(&merge_mcp_servers(kind, None, &servers).unwrap()).unwrap();
+            assert_eq!(merged[key]["srv"]["command"], "npx", "{kind:?}");
+            assert_eq!(
+                merged[key]["srv"].get("type").cloned(),
+                adds_stdio_type.then(|| Value::String("stdio".to_string())),
+                "{kind:?}"
+            );
+
+            // 同じ定義が既にあれば「変更なし」と判定される（マージと判定が同じキーを見る）
+            let existing = merged.to_string();
+            let changes = classify_server_changes(kind, Some(&existing), &servers).unwrap();
+            assert_eq!(changes["srv"], ServerChange::Unchanged, "{kind:?}");
+
+            let jsonc = "{ // comment\n \"keep\": 1 }";
+            let result = merge_mcp_servers(kind, Some(jsonc), &servers);
+            if allows_jsonc {
+                let value: Value = serde_json::from_str(&result.unwrap()).unwrap();
+                assert_eq!(value["keep"], 1, "{kind:?}");
+            } else {
+                assert!(
+                    matches!(result, Err(MergeError::InvalidExistingJson(_))),
+                    "{kind:?}"
+                );
+            }
+        }
+    }
+
     #[test]
     fn test_non_zed_rejects_jsonc() {
         let servers = McpServersMap::new();
