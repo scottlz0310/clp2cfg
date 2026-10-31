@@ -35,6 +35,7 @@ CI でも `bun run check`、Rust の format と Clippy、`cargo llvm-cov` によ
 - パース、フィルター、クライアント検出、設定のマージ、ファイル書き込みは、それぞれの既存モジュール（`src/snippet/parser.rs`、`src/snippet/filter.rs`、`src/merge.rs`、`src/discovery.rs`、`src/writer.rs` など）に置いてください。
 - スニペットから「フィルタ済みのサーバー定義 + プレースホルダー」への変換は、`src/snippet/pipeline.rs` の `prepare` を通してください。GUI と headless が同じ経路を使うため、パース・フィルター・プレースホルダーの呼び出しを画面側に直接書かないでください。
 - 設定ファイルの保存には `src/writer.rs` の安全な書き込み処理を使ってください。既存ファイルのバックアップとアトミックな置き換えを維持します。
+- クライアントへの適用（計画・書き込み・CLI の実行・取り消し）は、`src/apply/` を通してください。GUI と headless が同じ経路を使います。ファイルとサブプロセスは `TargetIo`（実体は `SystemIo`）経由でだけ触るため、画面側から `writer` や `delegate::exec` を直接呼ばないでください。テストでは `src/apply/fake.rs` のインメモリ fake を使えます。読み取れない既存ファイルを空として扱わず、エラーにする点も維持してください。
 - マージ時は対象クライアントの MCP 設定だけを更新し、他の設定や未知のフィールドを保ってください。
 
 ### モジュールの依存方向

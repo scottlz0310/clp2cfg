@@ -1,16 +1,15 @@
 //! Headless (no window) apply / dry-run, shared by `clp2cfg --apply` and `clp2cfg-cli`.
 
+use crate::apply::{
+    apply_targets, count_changes, plan_target, Applied, Mode as ApplyMode, ServerChanges, SystemIo,
+    TargetIo, TargetPlan,
+};
 use crate::args::{Args, HeadlessAction, Mode};
-use crate::delegate::exec::run_invocations;
-use crate::delegate::plan::{build_cli_invocations, CliInvocation};
-use crate::delegate::CliError;
 use crate::discovery::detect_client_targets;
 use crate::domain::{ClientTarget, ClientTargetKind, McpServersMap, ServerChange, TargetAction};
-use crate::preview::{build_preview_with_changes, ServerChanges};
 use crate::snippet::filter::FilterOptions;
 use crate::snippet::pipeline::{prepare, Prepared};
 use crate::snippet::placeholder::EnvOverrides;
-use crate::writer::safe_atomic_write;
 use std::fmt::Write as _;
 use std::path::Path;
 
@@ -30,7 +29,8 @@ pub trait Environment {
     fn stdin_text(&self) -> std::io::Result<String>;
     /// Every known target (existing or not), as the GUI would list them.
     fn targets(&self) -> Vec<ClientTarget>;
-    fn run_cli(&self, invocations: &[CliInvocation]) -> Result<(), CliError>;
+    /// Config files and CLI subprocesses.
+    fn io(&self) -> &dyn TargetIo;
 }
 
 /// The real environment: OS clipboard, standard input, detected clients, real CLI processes.
@@ -49,8 +49,8 @@ impl Environment for SystemEnvironment {
         detect_client_targets(None)
     }
 
-    fn run_cli(&self, invocations: &[CliInvocation]) -> Result<(), CliError> {
-        run_invocations(invocations)
+    fn io(&self) -> &dyn TargetIo {
+        &SystemIo
     }
 }
 
@@ -136,8 +136,8 @@ pub fn run(args: &Args, env: &dyn Environment) -> Report {
     };
 
     match action {
-        HeadlessAction::DryRun => dry_run(&servers, &targets, args.show_secrets),
-        HeadlessAction::Apply => apply(&servers, &targets, env),
+        HeadlessAction::DryRun => dry_run(&servers, &targets, args.show_secrets, env.io()),
+        HeadlessAction::Apply => apply(&servers, &targets, env.io()),
     }
 }
 
@@ -210,12 +210,11 @@ fn change_symbol(change: ServerChange) -> char {
 }
 
 fn change_summary(changes: &ServerChanges) -> String {
-    let count = |target: ServerChange| changes.values().filter(|c| **c == target).count();
     format!(
         "新規追加 {} / 上書き {} / 変更なし {}",
-        count(ServerChange::New),
-        count(ServerChange::Updated),
-        count(ServerChange::Unchanged)
+        count_changes(changes, ServerChange::New),
+        count_changes(changes, ServerChange::Updated),
+        count_changes(changes, ServerChange::Unchanged)
     )
 }
 
@@ -237,7 +236,12 @@ fn finish(stdout: String, errors: Vec<String>, done_label: &str, done: usize) ->
     }
 }
 
-fn dry_run(servers: &McpServersMap, targets: &[ClientTarget], show_secrets: bool) -> Report {
+fn dry_run(
+    servers: &McpServersMap,
+    targets: &[ClientTarget],
+    show_secrets: bool,
+    io: &dyn TargetIo,
+) -> Report {
     // env の値（API キー等）をログやターミナル履歴に残さないよう、表示用は伏せる
     let shown = if show_secrets {
         servers.clone()
@@ -257,79 +261,60 @@ fn dry_run(servers: &McpServersMap, targets: &[ClientTarget], show_secrets: bool
     let mut ok = 0;
     for target in targets {
         let _ = writeln!(out, "\n[{}] {}", target.name, target.path.display());
-        match target.kind.action() {
-            TargetAction::FileMerge => match build_preview_with_changes(target, servers) {
-                Ok((_, changes)) => {
-                    ok += 1;
-                    for (name, change) in changes.iter().flatten() {
-                        let _ = writeln!(
-                            out,
-                            "  {} {}  {}",
-                            change_symbol(*change),
-                            name,
-                            change.label()
-                        );
-                    }
-                }
-                Err(e) => errors.push(format!("[{}] {e}", target.name)),
-            },
-            TargetAction::CliCommand => {
-                let program = target.path.to_string_lossy();
-                match build_cli_invocations(target.kind, &program, &shown) {
-                    Ok(invocations) => {
-                        ok += 1;
-                        for invocation in invocations {
-                            let _ = writeln!(out, "  $ {}", invocation.display());
-                        }
-                    }
-                    Err(e) => errors.push(format!("[{}] {e}", target.name)),
+        // 表示するコマンドは env の値を伏せたサーバーで作る。ファイルの判定は実際の値で行う
+        let planned = match target.kind.action() {
+            TargetAction::FileMerge => plan_target(target, servers, io),
+            TargetAction::CliCommand => plan_target(target, &shown, io),
+        };
+        match planned {
+            Ok(TargetPlan::File { changes, .. }) => {
+                ok += 1;
+                for (name, change) in &changes {
+                    let _ = writeln!(
+                        out,
+                        "  {} {}  {}",
+                        change_symbol(*change),
+                        name,
+                        change.label()
+                    );
                 }
             }
+            Ok(TargetPlan::Cli { invocations }) => {
+                ok += 1;
+                for invocation in invocations {
+                    let _ = writeln!(out, "  $ {}", invocation.display());
+                }
+            }
+            Err(e) => errors.push(format!("[{}] {e}", target.name)),
         }
     }
     let _ = writeln!(out, "\n書き込みはしていません（dry-run）");
     finish(out, errors, "検証OK", ok)
 }
 
-fn apply(servers: &McpServersMap, targets: &[ClientTarget], env: &dyn Environment) -> Report {
+fn apply(servers: &McpServersMap, targets: &[ClientTarget], io: &dyn TargetIo) -> Report {
+    let outcome = apply_targets(targets, servers, ApplyMode::Apply, io);
+
     let mut out = String::new();
     let mut errors = Vec::new();
     let mut ok = 0;
-
-    for target in targets {
-        match target.kind.action() {
-            TargetAction::FileMerge => {
-                let result =
-                    build_preview_with_changes(target, servers).and_then(|(merged, changes)| {
-                        safe_atomic_write(&target.path, &merged).map_err(|e| e.to_string())?;
-                        Ok(changes)
-                    });
-                match result {
-                    Ok(changes) => {
-                        ok += 1;
-                        let summary = changes.as_ref().map(change_summary).unwrap_or_default();
-                        let _ = writeln!(
-                            out,
-                            "[{}] 適用: {} ({summary})",
-                            target.name,
-                            target.path.display()
-                        );
-                    }
-                    Err(e) => errors.push(format!("[{}] {e}", target.name)),
-                }
+    for result in &outcome.results {
+        match &result.result {
+            Ok(Applied::File { changes, .. }) => {
+                ok += 1;
+                let _ = writeln!(
+                    out,
+                    "[{}] 適用: {} ({})",
+                    result.name,
+                    result.path.display(),
+                    change_summary(changes)
+                );
             }
-            TargetAction::CliCommand => {
-                let program = target.path.to_string_lossy();
-                let result = build_cli_invocations(target.kind, &program, servers)
-                    .and_then(|invocations| env.run_cli(&invocations).map(|()| invocations.len()));
-                match result {
-                    Ok(count) => {
-                        ok += 1;
-                        let _ = writeln!(out, "[{}] 実行: {count} コマンド", target.name);
-                    }
-                    Err(e) => errors.push(format!("[{}] {e}", target.name)),
-                }
+            Ok(Applied::Cli { commands, .. }) => {
+                ok += 1;
+                let _ = writeln!(out, "[{}] 実行: {commands} コマンド", result.name);
             }
+            Err(e) => errors.push(format!("[{}] {e}", result.name)),
         }
     }
     finish(out, errors, "適用完了", ok)
@@ -338,6 +323,9 @@ fn apply(servers: &McpServersMap, targets: &[ClientTarget], env: &dyn Environmen
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::delegate::plan::CliInvocation;
+    use crate::delegate::CliError;
+    use crate::writer::WriteError;
     use std::cell::RefCell;
     use tempfile::tempdir;
 
@@ -370,6 +358,25 @@ mod tests {
         }
         fn targets(&self) -> Vec<ClientTarget> {
             self.targets.clone()
+        }
+        fn io(&self) -> &dyn TargetIo {
+            self
+        }
+    }
+
+    /// Files are real (a temp dir); only the CLI is faked.
+    impl TargetIo for FakeEnv {
+        fn read_config(&self, path: &Path) -> std::io::Result<Option<String>> {
+            SystemIo.read_config(path)
+        }
+        fn write_config(&self, path: &Path, content: &str) -> Result<(), WriteError> {
+            SystemIo.write_config(path, content)
+        }
+        fn restore_backup(&self, path: &Path) -> Result<(), WriteError> {
+            SystemIo.restore_backup(path)
+        }
+        fn remove_config(&self, path: &Path) -> std::io::Result<()> {
+            SystemIo.remove_config(path)
         }
         fn run_cli(&self, invocations: &[CliInvocation]) -> Result<(), CliError> {
             self.cli_calls
@@ -537,6 +544,61 @@ mod tests {
                 "{flag}: .bak を作らない"
             );
         }
+    }
+
+    /// dry-run の CLI 計画は、env の値だけを伏せ、コマンド側の引数（`-e` など）は伏せない。
+    /// （`display_redacted` で代用するとコマンドの `-e KEY=val` まで伏せてしまうため、方式を固定する）
+    #[test]
+    fn test_dry_run_masks_env_values_but_not_command_arguments() {
+        let env = FakeEnv::new(vec![cli_target(ClientTargetKind::ClaudeCli)]);
+        let snippet =
+            r#"{"srv":{"command":"node","args":["-e","X=1"],"env":{"K":"sk-secret-value"}}}"#;
+
+        let report = run(
+            &args(&["--dry-run", "--target", "claude-cli", snippet]),
+            &env,
+        );
+
+        assert_eq!(report.exit_code, EXIT_OK, "{report:?}");
+        assert!(
+            report
+                .stdout
+                .contains("  $ fake-cli mcp add --scope user srv -e 'K=***' -- node -e X=1\n"),
+            "{}",
+            report.stdout
+        );
+        assert!(!report.stdout.contains("sk-secret-value"));
+    }
+
+    /// 適用の出力行（ファイルは判定の要約つき、CLI はコマンド数）を固定する
+    #[test]
+    fn test_apply_output_lines() {
+        let dir = tempdir().unwrap();
+        let existing = file_target(
+            dir.path(),
+            ClientTargetKind::Cursor,
+            "cursor.json",
+            Some(r#"{"mcpServers":{"srv":{"command":"old"},"other":{"command":"x"}}}"#),
+        );
+        let env = FakeEnv::new(vec![
+            existing.clone(),
+            cli_target(ClientTargetKind::CodexCli),
+        ]);
+
+        let report = run(
+            &args(&["--apply", "--target", "cursor,codex-cli", SNIPPET]),
+            &env,
+        );
+
+        assert_eq!(report.exit_code, EXIT_OK, "{report:?}");
+        assert_eq!(
+            report.stdout,
+            format!(
+                "[Cursor] 適用: {} (新規追加 0 / 上書き 1 / 変更なし 0)\n[Codex CLI] 実行: 1 コマンド\n\n適用完了: 2 件\n",
+                existing.path.display()
+            )
+        );
+        assert_eq!(report.stderr, "");
     }
 
     #[test]

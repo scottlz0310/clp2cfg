@@ -1,13 +1,12 @@
-use crate::delegate::exec::run_invocations;
-use crate::delegate::plan::build_cli_invocations;
+use crate::apply::{
+    apply_targets, count_changes, plan_target, undo_file, Applied, LastApply, Mode, ServerChanges,
+    SystemIo, UndoAction,
+};
 use crate::discovery::detect_client_targets;
 use crate::domain::{ClientTarget, McpServersMap, ServerChange, TargetAction};
-use crate::preview::{build_preview, build_preview_with_changes, ServerChanges};
 use crate::snippet::filter::FilterOptions;
 use crate::snippet::pipeline::{prepare, Prepared};
 use crate::snippet::placeholder::{is_placeholder, EnvOverrides, EnvRef};
-use crate::undo::{undo_file, AppliedFile, LastApply, UndoAction};
-use crate::writer::safe_atomic_write;
 
 /// 各クライアント設定ターゲットの GUI 表示・状態
 #[derive(Debug, Clone)]
@@ -52,12 +51,11 @@ fn change_badge(change: ServerChange) -> (&'static str, egui::Color32) {
 
 /// 判定ごとの件数の要約（例: `新規追加 1 件 / 上書き 2 件 / 変更なし 0 件`）
 fn change_summary(changes: &ServerChanges) -> String {
-    let count = |target: ServerChange| changes.values().filter(|c| **c == target).count();
     format!(
         "新規追加 {} 件 / 上書き {} 件 / 変更なし {} 件",
-        count(ServerChange::New),
-        count(ServerChange::Updated),
-        count(ServerChange::Unchanged)
+        count_changes(changes, ServerChange::New),
+        count_changes(changes, ServerChange::Updated),
+        count_changes(changes, ServerChange::Unchanged)
     )
 }
 
@@ -274,10 +272,10 @@ impl Clp2cfgApp {
 
                 // 各ターゲットに対するマージプレビューを計算
                 for entry in &mut self.target_entries {
-                    match build_preview_with_changes(&entry.target, &filtered_servers) {
-                        Ok((preview, changes)) => {
-                            entry.diff_preview = Some(preview);
-                            entry.changes = changes;
+                    match plan_target(&entry.target, &filtered_servers, &SystemIo) {
+                        Ok(plan) => {
+                            entry.diff_preview = Some(plan.preview());
+                            entry.changes = plan.changes().cloned();
                             entry.error = None;
                         }
                         Err(err) => {
@@ -445,7 +443,7 @@ impl Clp2cfgApp {
         let mut done = Vec::new();
         let mut failed = Vec::new();
         for file in &last.files {
-            match undo_file(file) {
+            match undo_file(file, &SystemIo) {
                 Ok(action) => {
                     let label = match action {
                         UndoAction::Restored => "復元",
@@ -509,61 +507,38 @@ impl Clp2cfgApp {
             return;
         }
 
+        let selected: Vec<usize> = self
+            .target_entries
+            .iter()
+            .enumerate()
+            .filter(|(_, e)| e.target.selected)
+            .map(|(idx, _)| idx)
+            .collect();
+        let mode = if dry_run { Mode::DryRun } else { Mode::Apply };
+        let outcome = apply_targets(
+            selected.iter().map(|&idx| &self.target_entries[idx].target),
+            &servers,
+            mode,
+            &SystemIo,
+        );
+
         let mut success_targets = Vec::new();
         let mut fail_targets = Vec::new();
-        let mut applied_files = Vec::new();
-        let mut applied_clis = Vec::new();
-
-        for entry in &mut self.target_entries {
-            if !entry.target.selected {
-                continue;
-            }
-
-            let result = match entry.target.kind.action() {
-                TargetAction::FileMerge => {
-                    let had_original = entry.target.path.is_file();
-                    build_preview(&entry.target, &servers).and_then(|merged| {
-                        if dry_run {
-                            return Ok(());
-                        }
-                        safe_atomic_write(&entry.target.path, &merged)
-                            .map_err(|e| e.to_string())
-                            .map(|_| {
-                                entry.target.exists = true;
-                                applied_files.push(AppliedFile {
-                                    target_name: entry.target.name.clone(),
-                                    path: entry.target.path.clone(),
-                                    written: merged,
-                                    had_original,
-                                });
-                            })
-                    })
-                }
-                TargetAction::CliCommand => {
-                    let program = entry.target.path.to_string_lossy();
-                    build_cli_invocations(entry.target.kind, &program, &servers)
-                        .and_then(|inv| {
-                            if dry_run {
-                                Ok(())
-                            } else {
-                                run_invocations(&inv)
-                            }
-                        })
-                        .map_err(|e| e.to_string())
-                }
-            };
-
-            match result {
-                Ok(()) if dry_run => success_targets.push(format!("{}(検証OK)", entry.target.name)),
-                Ok(()) => {
-                    if entry.target.kind.action() == TargetAction::CliCommand {
-                        applied_clis.push(entry.target.name.clone());
+        for (&idx, result) in selected.iter().zip(&outcome.results) {
+            match &result.result {
+                Ok(_) if dry_run => success_targets.push(format!("{}(検証OK)", result.name)),
+                Ok(applied) => {
+                    // 書き込めたファイルは「既存」になる
+                    if matches!(applied, Applied::File { .. }) {
+                        self.target_entries[idx].target.exists = true;
                     }
-                    success_targets.push(entry.target.name.clone());
+                    success_targets.push(result.name.clone());
                 }
-                Err(err) => fail_targets.push(format!("{}: {}", entry.target.name, err)),
+                Err(err) => fail_targets.push(format!("{}: {}", result.name, err)),
             }
         }
+        let applied_files = outcome.applied_files();
+        let applied_clis = outcome.executed_cli_names();
 
         // 何も変更できなかった適用では、直前の記録を残す。CLI だけを実行した適用は取り消せないので、
         // 古い記録が「直前の適用」と誤認されないよう破棄する
@@ -1074,6 +1049,7 @@ pub fn load_app_icon() -> Option<egui::IconData> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::apply::AppliedFile;
     use crate::domain::{ClientTarget, ClientTargetKind};
     use tempfile::tempdir;
 
@@ -1811,6 +1787,80 @@ mod tests {
         app.raw_input = r#"{"added":{"command":"node"}}"#.to_string();
         app.reparse();
         (app, path)
+    }
+
+    /// 適用のステータスメッセージの書式と、取り消し用の記録の中身を固定する
+    #[test]
+    fn test_apply_status_messages_and_last_apply_record() {
+        let temp = tempdir().unwrap();
+        let existing = temp.path().join("existing.json");
+        std::fs::write(&existing, r#"{"keep":1}"#).unwrap();
+        let mut ok_existing =
+            crate::discovery::file_target(ClientTargetKind::Cursor, existing.clone());
+        ok_existing.selected = true;
+        let mut ok_new =
+            crate::discovery::file_target(ClientTargetKind::Windsurf, temp.path().join("new.json"));
+        ok_new.selected = true;
+        // 親パスがファイルのため、書き込みが必ず失敗する
+        let blocking = temp.path().join("blocking_file");
+        std::fs::write(&blocking, "x").unwrap();
+        let mut bad =
+            crate::discovery::file_target(ClientTargetKind::Cline, blocking.join("mcp.json"));
+        bad.selected = true;
+
+        let mut app = Clp2cfgApp::new_with_targets(vec![ok_existing, ok_new, bad]);
+        app.auto_read_clipboard = false;
+        app.raw_input = r#"{"test":{"command":"echo"}}"#.to_string();
+        app.reparse();
+
+        app.apply_all(true);
+        let (dry, is_err) = app.status_message.clone().unwrap();
+        assert!(!is_err);
+        assert_eq!(
+            dry,
+            "[Dry-Run] 適用完了: 3 件 (Cursor(検証OK), Windsurf(検証OK), Cline (VS Code)(検証OK))"
+        );
+        assert!(app.last_apply.is_none(), "Dry-Run は記録を作らない");
+
+        app.apply_all(false);
+        let (message, is_err) = app.status_message.clone().unwrap();
+        assert!(is_err);
+        assert!(
+            message.starts_with("一部失敗: 成功 2 件, 失敗 1 件 (Cline (VS Code): "),
+            "{message}"
+        );
+
+        // 取り消し用の記録: 書き込めた 2 件だけ。新規作成かどうか、書いた内容を持つ
+        let last = app.last_apply.as_ref().unwrap();
+        assert_eq!(last.files.len(), 2);
+        let by_name = |name: &str| last.files.iter().find(|f| f.target_name == name).unwrap();
+        let updated = by_name("Cursor");
+        assert_eq!(updated.path, existing);
+        assert!(updated.had_original);
+        assert_eq!(updated.written, std::fs::read_to_string(&existing).unwrap());
+        let created = by_name("Windsurf");
+        assert!(!created.had_original);
+        assert_eq!(
+            created.written,
+            std::fs::read_to_string(&created.path).unwrap()
+        );
+        assert!(last.cli_targets.is_empty());
+
+        // 書き込めたターゲットは「既存」になる
+        assert!(app.target_entries[1].target.exists);
+        assert!(!app.target_entries[2].target.exists);
+    }
+
+    #[test]
+    fn test_apply_success_message_lists_every_target() {
+        let temp = tempdir().unwrap();
+        let (mut app, _path) = app_with_file_target(temp.path(), None);
+
+        app.apply_all(false);
+
+        let (message, is_err) = app.status_message.clone().unwrap();
+        assert!(!is_err);
+        assert_eq!(message, "適用完了: 1 件 (Cursor)");
     }
 
     #[test]

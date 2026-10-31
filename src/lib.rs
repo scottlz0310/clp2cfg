@@ -1,4 +1,5 @@
 pub mod app;
+pub mod apply;
 pub mod args;
 pub mod delegate;
 pub mod discovery;
@@ -6,7 +7,5 @@ pub mod domain;
 pub mod entry;
 pub mod headless;
 pub mod merge;
-pub mod preview;
 pub mod snippet;
-pub mod undo;
 pub mod writer;

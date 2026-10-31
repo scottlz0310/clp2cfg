@@ -1,7 +1,7 @@
 //! Undo of the most recent apply: restore files from their `.bak`, or remove files the apply created.
 
-use crate::writer::{restore_from_backup, WriteError};
-use std::fs;
+use super::TargetIo;
+use crate::writer::WriteError;
 use std::path::PathBuf;
 use thiserror::Error;
 
@@ -51,12 +51,8 @@ pub enum UndoError {
 ///
 /// The file is only touched when its current content is exactly what the apply wrote,
 /// so changes made by anything else after the apply are never discarded.
-pub fn undo_file(file: &AppliedFile) -> Result<UndoAction, UndoError> {
-    let current = match fs::read_to_string(&file.path) {
-        Ok(content) => Some(content),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
-        Err(e) => return Err(e.into()),
-    };
+pub fn undo_file(file: &AppliedFile, io: &dyn TargetIo) -> Result<UndoAction, UndoError> {
+    let current = io.read_config(&file.path)?;
 
     if current.as_deref().is_some_and(|c| c != file.written) {
         return Err(UndoError::ModifiedSinceApply);
@@ -64,11 +60,11 @@ pub fn undo_file(file: &AppliedFile) -> Result<UndoAction, UndoError> {
 
     match (file.had_original, current) {
         (true, _) => {
-            restore_from_backup(&file.path)?;
+            io.restore_backup(&file.path)?;
             Ok(UndoAction::Restored)
         }
         (false, Some(_)) => {
-            fs::remove_file(&file.path)?;
+            io.remove_config(&file.path)?;
             Ok(UndoAction::Removed)
         }
         (false, None) => Ok(UndoAction::AlreadyGone),
@@ -77,8 +73,11 @@ pub fn undo_file(file: &AppliedFile) -> Result<UndoAction, UndoError> {
 
 #[cfg(test)]
 mod tests {
+    use super::super::fake::FakeIo;
+    use super::super::SystemIo;
     use super::*;
     use crate::writer::safe_atomic_write;
+    use std::fs;
     use tempfile::tempdir;
 
     /// Apply `content` over `original` (if any) the way the app does, and describe it.
@@ -147,7 +146,7 @@ mod tests {
                 fs::write(&applied.path, tampered).unwrap();
             }
 
-            let result = undo_file(&applied);
+            let result = undo_file(&applied, &SystemIo);
 
             match (&result, &case.expected) {
                 (Ok(actual), Ok(expected)) => assert_eq!(actual, expected, "{}", case.name),
@@ -165,13 +164,19 @@ mod tests {
         let dir = tempdir().unwrap();
         let created = apply(dir.path(), None, "applied");
         fs::remove_file(&created.path).unwrap();
-        assert_eq!(undo_file(&created).unwrap(), UndoAction::AlreadyGone);
+        assert_eq!(
+            undo_file(&created, &SystemIo).unwrap(),
+            UndoAction::AlreadyGone
+        );
 
         // 既存ファイルが消されていても、.bak から復元できる（失うものがない）
         let dir = tempdir().unwrap();
         let existing = apply(dir.path(), Some("original"), "applied");
         fs::remove_file(&existing.path).unwrap();
-        assert_eq!(undo_file(&existing).unwrap(), UndoAction::Restored);
+        assert_eq!(
+            undo_file(&existing, &SystemIo).unwrap(),
+            UndoAction::Restored
+        );
         assert_eq!(fs::read_to_string(&existing.path).unwrap(), "original");
     }
 
@@ -181,7 +186,7 @@ mod tests {
         let applied = apply(dir.path(), Some("original"), "applied");
         fs::remove_file(dir.path().join("mcp.json.bak")).unwrap();
 
-        let err = undo_file(&applied).unwrap_err();
+        let err = undo_file(&applied, &SystemIo).unwrap_err();
 
         assert!(matches!(
             err,
@@ -189,5 +194,40 @@ mod tests {
         ));
         // 失敗しても現在のファイルは触らない
         assert_eq!(fs::read_to_string(&applied.path).unwrap(), "applied");
+    }
+
+    #[test]
+    fn test_undo_decisions_with_a_fake_port() {
+        let file = |had_original| AppliedFile {
+            target_name: "T".to_string(),
+            path: PathBuf::from("/cfg/a.json"),
+            written: "applied".to_string(),
+            had_original,
+        };
+
+        // 変更されていれば、読み取り以外の操作をしない
+        let io = FakeIo::default().with_file("/cfg/a.json", "edited");
+        assert!(matches!(
+            undo_file(&file(true), &io),
+            Err(UndoError::ModifiedSinceApply)
+        ));
+        assert!(io.backups.borrow().is_empty());
+        assert_eq!(io.content("/cfg/a.json").as_deref(), Some("edited"));
+
+        // 読み取れなければ、既存ファイルを消したり復元したりしない
+        let io = FakeIo::default().with_file("/cfg/a.json", "applied");
+        io.unreadable
+            .borrow_mut()
+            .insert(PathBuf::from("/cfg/a.json"));
+        assert!(matches!(
+            undo_file(&file(false), &io),
+            Err(UndoError::Io(_))
+        ));
+        assert_eq!(io.content("/cfg/a.json").as_deref(), Some("applied"));
+
+        // 新規作成したファイルは削除される
+        let io = FakeIo::default().with_file("/cfg/a.json", "applied");
+        assert_eq!(undo_file(&file(false), &io).unwrap(), UndoAction::Removed);
+        assert_eq!(io.content("/cfg/a.json"), None);
     }
 }
