@@ -2,12 +2,12 @@ use crate::delegate::exec::run_invocations;
 use crate::delegate::plan::build_cli_invocations;
 use crate::discovery::detect_client_targets;
 use crate::domain::{ClientTarget, McpServersMap, ServerChange, TargetAction};
-use crate::filter::{apply_filters, FilterOptions};
-use crate::parser::parse_mcp_snippet;
-use crate::placeholder::{
+use crate::preview::{build_preview, build_preview_with_changes, ServerChanges};
+use crate::snippet::filter::{apply_filters, FilterOptions};
+use crate::snippet::parser::parse_mcp_snippet;
+use crate::snippet::placeholder::{
     fill_placeholders, find_placeholders, is_placeholder, EnvOverrides, EnvRef,
 };
-use crate::preview::{build_preview, build_preview_with_changes, ServerChanges};
 use crate::undo::{undo_file, AppliedFile, LastApply, UndoAction};
 use crate::writer::safe_atomic_write;
 

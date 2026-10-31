@@ -32,7 +32,7 @@ CI でも `bun run check`、Rust の format と Clippy、`cargo llvm-cov` によ
 ## アーキテクチャのガードレール
 
 - `src/main.rs` は起動処理と配線だけに保ち、80 行を超えないようにしてください。`tests/architecture_test.rs` が行数と主要ロジックの混入を確認します。
-- パース、フィルター、クライアント検出、設定のマージ、ファイル書き込みは、それぞれの既存モジュール（`src/parser.rs`、`src/filter.rs`、`src/merge.rs`、`src/discovery.rs`、`src/writer.rs` など）に置いてください。
+- パース、フィルター、クライアント検出、設定のマージ、ファイル書き込みは、それぞれの既存モジュール（`src/snippet/parser.rs`、`src/snippet/filter.rs`、`src/merge.rs`、`src/discovery.rs`、`src/writer.rs` など）に置いてください。
 - 設定ファイルの保存には `src/writer.rs` の安全な書き込み処理を使ってください。既存ファイルのバックアップとアトミックな置き換えを維持します。
 - マージ時は対象クライアントの MCP 設定だけを更新し、他の設定や未知のフィールドを保ってください。
 
@@ -64,7 +64,7 @@ CI でも `bun run check`、Rust の format と Clippy、`cargo llvm-cov` によ
 2. ファイルを直接マージするクライアントは、`src/discovery.rs` の `config_path` に、OS ごとの保存先を追加します（`match` が網羅されているため、追加し忘れるとコンパイルエラーになります）。ユーザーのホームや設定ディレクトリは `HostDirs` から受け取ります。公式 CLI へ委譲するクライアントは、PATH 上の実行ファイルの検出が自動で行われるため、追加は要りません。
 3. 既存の設定を残し、同名サーバーは既存の upsert 動作に合わせて更新することを確認します。`src/merge.rs` のマージと `src/delegate/plan.rs` のコマンド生成は `ClientSpec` を読むため、通常はコードの変更は要りません。新しい形式の差が `FileSpec` / `CliSpec` で表せない場合に限り、項目を足してください。
 4. テストを更新します。`src/domain/client.rs` の `test_every_client_keeps_its_identity` に 1 行足し、`src/merge.rs` の `test_file_targets_keep_their_servers_key_and_quirks`（ファイル種）または `src/delegate/plan.rs` のコマンド列のテスト（CLI 種）に、そのクライアントのケースを加えます。保存先は `src/discovery.rs` の `test_config_path_for_every_client` に 1 行足します。
-5. 新しい入力形式が既存の形式で扱えない場合に限り、`src/parser.rs` を更新します。
+5. 新しい入力形式が既存の形式で扱えない場合に限り、`src/snippet/parser.rs` を更新します。
 
 ## Pull request
 
