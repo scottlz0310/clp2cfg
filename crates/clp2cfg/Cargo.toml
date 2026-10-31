@@ -1,0 +1,25 @@
+[package]
+name = "clp2cfg"
+# 版は clp2cfg-cli の Cargo.toml が持つ。build.rs が Windows のファイルバージョンへ反映する
+version = "0.0.0"
+edition.workspace = true
+description = "Lightweight GUI tool to parse and merge MCP server config snippets into AI client configurations"
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+arboard.workspace = true
+clp2cfg-cli = { path = "../clp2cfg-cli" }
+clp2cfg-core = { path = "../clp2cfg-core" }
+eframe.workspace = true
+egui.workspace = true
+image.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[target.'cfg(windows)'.build-dependencies]
+winres.workspace = true

@@ -68,14 +68,14 @@ winget install scottlz0310.clp2cfg
 Rust (Cargo) 開発環境がある場合、ローカルでビルド・インストールすることで改ざんの心配なく安全に利用できます。ローカルでコンパイルされたバイナリには Mark-of-the-Web (Zone.Identifier) が付与されないため、**SmartScreen 警告は一切発生しません**。
 
 ```powershell
-# 1 コマンドで GitHub から直接インストール
-cargo install --git https://github.com/scottlz0310/clp2cfg
+# 1 コマンドで GitHub から直接インストール（GUI 版 clp2cfg とコンソール版 clp2cfg-cli）
+cargo install --git https://github.com/scottlz0310/clp2cfg clp2cfg clp2cfg-cli
 
 # またはソースコードをクローンしてビルド
 git clone https://github.com/scottlz0310/clp2cfg.git
 cd clp2cfg
 cargo build --release
-# target/release/clp2cfg.exe が生成されます
+# target/release/clp2cfg.exe と clp2cfg-cli.exe が生成されます
 ```
 
 #### macOS について
@@ -124,8 +124,8 @@ bun run check
 
 # Rust コード検証
 cargo fmt --check
-cargo clippy --all-targets -- -D warnings
-cargo test
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
 ```
 
 ## コマンドライン
@@ -137,7 +137,7 @@ cargo test
 | `clp2cfg`     | GUI 版。`INPUT` を渡すと GUI にスニペットを流し込んでプレビューまで表示します。`--apply` / `--dry-run` を付けると、ウィンドウを出さずにサイレントで実行し、**終了コードだけ**を返します（出力はありません） |
 | `clp2cfg-cli` | コンソール版。常にヘッドレスで、結果を標準出力・標準エラーに出力し、終了コードを返します。スクリプトで結果を使う場合はこちらを使います                                                                      |
 
-> `clp2cfg-cli` は ZIP（`clp2cfg-cli.exe`）と `cargo install --git https://github.com/scottlz0310/clp2cfg` で入手できます。Scoop / winget への対応は、リリース作業とあわせて後日行います。
+> `clp2cfg-cli` は ZIP（`clp2cfg-cli.exe`）と `cargo install --git https://github.com/scottlz0310/clp2cfg clp2cfg-cli` で入手できます。Scoop / winget への対応は、リリース作業とあわせて後日行います。
 
 ```sh
 # クリップボードの内容を、既存の設定ファイルすべてに適用（GUI 版でもサイレントに実行）

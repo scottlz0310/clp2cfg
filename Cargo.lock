@@ -699,22 +699,42 @@ dependencies = [
 
 [[package]]
 name = "clp2cfg"
+version = "0.0.0"
+dependencies = [
+ "arboard",
+ "clp2cfg-cli",
+ "clp2cfg-core",
+ "eframe",
+ "egui",
+ "image",
+ "tempfile",
+ "tracing",
+ "tracing-subscriber",
+ "winres",
+]
+
+[[package]]
+name = "clp2cfg-cli"
 version = "0.2.0"
 dependencies = [
  "arboard",
  "clap",
+ "clp2cfg-core",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "clp2cfg-core"
+version = "0.0.0"
+dependencies = [
  "dirs",
- "eframe",
- "egui",
- "image",
  "json5",
  "serde",
  "serde_json",
  "tempfile",
  "thiserror 2.0.21",
- "tracing",
- "tracing-subscriber",
- "winres",
 ]
 
 [[package]]

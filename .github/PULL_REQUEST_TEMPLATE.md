@@ -10,8 +10,8 @@ Closes #
 
 - [ ] `bun run check`
 - [ ] `cargo fmt --check`
-- [ ] `cargo clippy --all-targets -- -D warnings`
-- [ ] `cargo test`
+- [ ] `cargo clippy --workspace --all-targets -- -D warnings`
+- [ ] `cargo test --workspace`
 - [ ] 上記を実行していない場合は、その理由を記載しました。
 
 ## チェックリスト
