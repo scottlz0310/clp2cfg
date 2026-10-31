@@ -33,6 +33,7 @@ CI でも `bun run check`、Rust の format と Clippy、`cargo llvm-cov` によ
 
 - `src/main.rs` は起動処理と配線だけに保ち、80 行を超えないようにしてください。`tests/architecture_test.rs` が行数と主要ロジックの混入を確認します。
 - パース、フィルター、クライアント検出、設定のマージ、ファイル書き込みは、それぞれの既存モジュール（`src/snippet/parser.rs`、`src/snippet/filter.rs`、`src/merge.rs`、`src/discovery.rs`、`src/writer.rs` など）に置いてください。
+- スニペットから「フィルタ済みのサーバー定義 + プレースホルダー」への変換は、`src/snippet/pipeline.rs` の `prepare` を通してください。GUI と headless が同じ経路を使うため、パース・フィルター・プレースホルダーの呼び出しを画面側に直接書かないでください。
 - 設定ファイルの保存には `src/writer.rs` の安全な書き込み処理を使ってください。既存ファイルのバックアップとアトミックな置き換えを維持します。
 - マージ時は対象クライアントの MCP 設定だけを更新し、他の設定や未知のフィールドを保ってください。
 

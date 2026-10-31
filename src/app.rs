@@ -3,11 +3,9 @@ use crate::delegate::plan::build_cli_invocations;
 use crate::discovery::detect_client_targets;
 use crate::domain::{ClientTarget, McpServersMap, ServerChange, TargetAction};
 use crate::preview::{build_preview, build_preview_with_changes, ServerChanges};
-use crate::snippet::filter::{apply_filters, FilterOptions};
-use crate::snippet::parser::parse_mcp_snippet;
-use crate::snippet::placeholder::{
-    fill_placeholders, find_placeholders, is_placeholder, EnvOverrides, EnvRef,
-};
+use crate::snippet::filter::FilterOptions;
+use crate::snippet::pipeline::{prepare, Prepared};
+use crate::snippet::placeholder::{is_placeholder, EnvOverrides, EnvRef};
 use crate::undo::{undo_file, AppliedFile, LastApply, UndoAction};
 use crate::writer::safe_atomic_write;
 
@@ -226,7 +224,8 @@ impl Clp2cfgApp {
             return false;
         }
         self.last_clipboard_seen = Some(trimmed.to_string());
-        if only_valid_mcp && parse_mcp_snippet(text).is_err() {
+        if only_valid_mcp && prepare(text, &FilterOptions::default(), &EnvOverrides::new()).is_err()
+        {
             return false;
         }
         if trimmed == self.raw_input.trim() {
@@ -262,24 +261,16 @@ impl Clp2cfgApp {
             return;
         }
 
-        match parse_mcp_snippet(&self.raw_input) {
-            Ok(servers) => {
-                let options = FilterOptions {
-                    replace_npx_with_bunx: self.replace_npx_with_bunx,
-                    replace_pipx_with_uvx: self.replace_pipx_with_uvx,
-                };
-
-                let mut filtered_servers: McpServersMap = servers
-                    .into_iter()
-                    .map(|(k, v)| (k, apply_filters(v, &options)))
-                    .collect();
-
-                self.placeholder_fields = find_placeholders(&filtered_servers);
-                fill_placeholders(
-                    &mut filtered_servers,
-                    &self.placeholder_fields,
-                    &self.env_overrides,
-                );
+        let filters = FilterOptions {
+            replace_npx_with_bunx: self.replace_npx_with_bunx,
+            replace_pipx_with_uvx: self.replace_pipx_with_uvx,
+        };
+        match prepare(&self.raw_input, &filters, &self.env_overrides) {
+            Ok(Prepared {
+                servers: filtered_servers,
+                placeholders,
+            }) => {
+                self.placeholder_fields = placeholders;
 
                 // 各ターゲットに対するマージプレビューを計算
                 for entry in &mut self.target_entries {

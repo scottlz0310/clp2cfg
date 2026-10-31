@@ -92,6 +92,7 @@ const FILE_LAYERS: &[(&str, Layer)] = &[
     ("snippet", Layer::Pure),
     ("snippet::parser", Layer::Pure),
     ("snippet::filter", Layer::Pure),
+    ("snippet::pipeline", Layer::Pure),
     ("snippet::placeholder", Layer::Pure),
     ("merge", Layer::Pure),
     ("delegate", Layer::Pure),

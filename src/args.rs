@@ -1,6 +1,7 @@
 //! GUI 版（`clp2cfg`）とコンソール版（`clp2cfg-cli`）で共通の起動引数。
 
 use crate::domain::ClientTargetKind;
+use crate::snippet::filter::FilterOptions;
 use clap::builder::PossibleValuesParser;
 use clap::{ArgGroup, Parser};
 
@@ -65,6 +66,15 @@ pub enum HeadlessAction {
 pub enum Mode {
     Gui,
     Headless(HeadlessAction),
+}
+
+impl From<&Args> for FilterOptions {
+    fn from(args: &Args) -> Self {
+        Self {
+            replace_npx_with_bunx: !args.no_npx_to_bunx,
+            replace_pipx_with_uvx: !args.no_pipx_to_uvx,
+        }
+    }
 }
 
 impl Args {
