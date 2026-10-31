@@ -1228,6 +1228,33 @@ mod tests {
     }
 
     #[test]
+    fn test_app_unreadable_existing_file_is_an_error_and_is_not_overwritten() {
+        let temp = tempdir().unwrap();
+        let target = make_test_target(temp.path(), ClientTargetKind::Cursor, "mcp.json");
+        let bytes = vec![b'{', 0xC3, 0x28, b'}']; // 不正な UTF-8
+        std::fs::write(&target.path, &bytes).unwrap();
+        let target = ClientTarget::new(ClientTargetKind::Cursor, target.path);
+        let path = target.path.clone();
+
+        let mut app = Clp2cfgApp::new_with_targets(vec![target]);
+        app.raw_input = r#"{"test": {"command": "echo"}}"#.to_string();
+        app.reparse();
+
+        let entry = &app.target_entries[0];
+        assert!(entry.diff_preview.is_none());
+        assert!(entry
+            .error
+            .as_ref()
+            .is_some_and(|e| e.contains("設定ファイルを読み取れません")));
+
+        app.apply_all(false);
+
+        assert!(app.status_message.as_ref().unwrap().1); // is_error = true
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
+        assert!(!crate::writer::backup_path_for(&path).exists());
+    }
+
+    #[test]
     fn test_app_apply_no_targets_selected() {
         let temp = tempdir().unwrap();
         let target = make_test_target(temp.path(), ClientTargetKind::Cursor, "mcp.json");

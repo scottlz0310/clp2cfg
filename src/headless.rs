@@ -518,6 +518,35 @@ mod tests {
     }
 
     #[test]
+    fn test_unreadable_existing_file_fails_without_touching_it() {
+        // UTF-16 LE（BOM 付き）の既存ファイルを空として上書きしない
+        let mut bytes = vec![0xFF, 0xFE];
+        bytes.extend(r#"{"other":"precious"}"#.encode_utf16().flat_map(u16::to_le_bytes));
+
+        for flag in ["--dry-run", "--apply"] {
+            let dir = tempdir().unwrap();
+            let target = file_target(dir.path(), ClientTargetKind::Cursor, "cursor.json", None);
+            std::fs::write(&target.path, &bytes).unwrap();
+            let target = ClientTarget::new(ClientTargetKind::Cursor, target.path);
+            let env = FakeEnv::new(vec![target.clone()]);
+
+            let report = run(&args(&[flag, SNIPPET]), &env);
+
+            assert_eq!(report.exit_code, EXIT_FAILED, "{flag}: {report:?}");
+            assert!(
+                report.stderr.contains("設定ファイルを読み取れません"),
+                "{flag}: {}",
+                report.stderr
+            );
+            assert_eq!(std::fs::read(&target.path).unwrap(), bytes, "{flag}");
+            assert!(
+                !crate::writer::backup_path_for(&target.path).exists(),
+                "{flag}: .bak を作らない"
+            );
+        }
+    }
+
+    #[test]
     fn test_apply_with_explicit_targets_creates_files_and_runs_cli() {
         let dir = tempdir().unwrap();
         let missing = file_target(
