@@ -141,12 +141,12 @@ fn vscode_user_dir(home: Option<&Path>) -> Option<std::path::PathBuf> {
     }
 }
 
-/// Parse existing config content. Zed's `settings.json` is JSONC, so fall back to JSON5
-/// (comments are not preserved on rewrite; the `.bak` copy keeps the original).
+/// Parse existing config content. Some clients' files are JSONC (e.g. Zed's `settings.json`), so
+/// fall back to JSON5 for them (comments are not preserved on rewrite; the `.bak` copy keeps the original).
 fn parse_existing(kind: ClientTargetKind, content: &str) -> Result<Value, MergeError> {
     match serde_json::from_str(content) {
         Ok(v) => Ok(v),
-        Err(e) if kind == ClientTargetKind::Zed => {
+        Err(e) if kind.file_spec().is_some_and(|file| file.allows_jsonc) => {
             json5::from_str(content).map_err(|_| MergeError::InvalidExistingJson(e.to_string()))
         }
         Err(e) => Err(MergeError::InvalidExistingJson(e.to_string())),
@@ -155,20 +155,9 @@ fn parse_existing(kind: ClientTargetKind, content: &str) -> Result<Value, MergeE
 
 /// The JSON key that holds the MCP servers for a file target.
 fn servers_key(kind: ClientTargetKind) -> Result<&'static str, MergeError> {
-    match kind {
-        ClientTargetKind::Claude
-        | ClientTargetKind::Cursor
-        | ClientTargetKind::Project
-        | ClientTargetKind::Windsurf
-        | ClientTargetKind::Cline
-        | ClientTargetKind::RooCode => Ok("mcpServers"),
-        ClientTargetKind::VsCode => Ok("github.copilot.chat.mcp"),
-        ClientTargetKind::Zed => Ok("context_servers"),
-        ClientTargetKind::ClaudeCli
-        | ClientTargetKind::CodexCli
-        | ClientTargetKind::CopilotCli
-        | ClientTargetKind::AntigravityCli => Err(MergeError::NotFileTarget),
-    }
+    kind.file_spec()
+        .map(|file| file.servers_key)
+        .ok_or(MergeError::NotFileTarget)
 }
 
 /// The JSON value written for one server (shared by merging and change detection so they agree).
@@ -179,8 +168,8 @@ fn server_value(
     let mut server_val =
         serde_json::to_value(config).map_err(|e| MergeError::SerializationFailed(e.to_string()))?;
 
-    // Claude requires/prefers "type": "stdio"
-    if kind == ClientTargetKind::Claude {
+    // Some clients (Claude) require/prefer "type": "stdio"
+    if kind.file_spec().is_some_and(|file| file.adds_stdio_type) {
         if let Some(obj) = server_val.as_object_mut() {
             if !obj.contains_key("type") {
                 obj.insert("type".to_string(), Value::String("stdio".to_string()));
@@ -388,6 +377,57 @@ mod tests {
         assert_eq!(val["theme"], "One Dark");
         assert_eq!(val["context_servers"]["old"]["command"], "x");
         assert_eq!(val["context_servers"]["srv"]["command"], "uvx");
+    }
+
+    /// ファイル種ごとの違い（設定キー / JSONC を許すか / `type: stdio` を補うか）を全種類で固定する
+    #[test]
+    fn test_file_targets_keep_their_servers_key_and_quirks() {
+        // (種類, 設定キー, 既存の JSONC を許す, "type": "stdio" を補う)
+        let cases = [
+            (ClientTargetKind::Claude, "mcpServers", false, true),
+            (ClientTargetKind::Cursor, "mcpServers", false, false),
+            (
+                ClientTargetKind::VsCode,
+                "github.copilot.chat.mcp",
+                false,
+                false,
+            ),
+            (ClientTargetKind::Project, "mcpServers", false, false),
+            (ClientTargetKind::Windsurf, "mcpServers", false, false),
+            (ClientTargetKind::Cline, "mcpServers", false, false),
+            (ClientTargetKind::RooCode, "mcpServers", false, false),
+            (ClientTargetKind::Zed, "context_servers", true, false),
+        ];
+        let mut servers = McpServersMap::new();
+        servers.insert("srv".to_string(), create_dummy_server("npx"));
+
+        for (kind, key, allows_jsonc, adds_stdio_type) in cases {
+            let merged: Value =
+                serde_json::from_str(&merge_mcp_servers(kind, None, &servers).unwrap()).unwrap();
+            assert_eq!(merged[key]["srv"]["command"], "npx", "{kind:?}");
+            assert_eq!(
+                merged[key]["srv"].get("type").cloned(),
+                adds_stdio_type.then(|| Value::String("stdio".to_string())),
+                "{kind:?}"
+            );
+
+            // 同じ定義が既にあれば「変更なし」と判定される（マージと判定が同じキーを見る）
+            let existing = merged.to_string();
+            let changes = classify_server_changes(kind, Some(&existing), &servers).unwrap();
+            assert_eq!(changes["srv"], ServerChange::Unchanged, "{kind:?}");
+
+            let jsonc = "{ // comment\n \"keep\": 1 }";
+            let result = merge_mcp_servers(kind, Some(jsonc), &servers);
+            if allows_jsonc {
+                let value: Value = serde_json::from_str(&result.unwrap()).unwrap();
+                assert_eq!(value["keep"], 1, "{kind:?}");
+            } else {
+                assert!(
+                    matches!(result, Err(MergeError::InvalidExistingJson(_))),
+                    "{kind:?}"
+                );
+            }
+        }
     }
 
     #[test]

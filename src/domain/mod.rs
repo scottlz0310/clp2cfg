@@ -5,5 +5,7 @@ mod client;
 mod server;
 
 pub use change::ServerChange;
-pub use client::{ClientTarget, ClientTargetKind, TargetAction};
+pub use client::{
+    ApplySpec, CliSpec, ClientSpec, ClientTarget, ClientTargetKind, FileSpec, TargetAction,
+};
 pub use server::{McpServersMap, NormalizedServerConfig};
