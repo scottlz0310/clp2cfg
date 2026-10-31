@@ -36,6 +36,7 @@ CI でも `bun run check`、Rust の format と Clippy、`cargo llvm-cov` によ
 - スニペットから「フィルタ済みのサーバー定義 + プレースホルダー」への変換は、`src/snippet/pipeline.rs` の `prepare` を通してください。GUI と headless が同じ経路を使うため、パース・フィルター・プレースホルダーの呼び出しを画面側に直接書かないでください。
 - 設定ファイルの保存には `src/writer.rs` の安全な書き込み処理を使ってください。既存ファイルのバックアップとアトミックな置き換えを維持します。
 - クライアントへの適用（計画・書き込み・CLI の実行・取り消し）は、`src/apply/` を通してください。GUI と headless が同じ経路を使います。ファイルとサブプロセスは `TargetIo`（実体は `SystemIo`）経由でだけ触るため、画面側から `writer` や `delegate::exec` を直接呼ばないでください。テストでは `src/apply/fake.rs` のインメモリ fake を使えます。読み取れない既存ファイルを空として扱わず、エラーにする点も維持してください。
+- headless（`src/headless/`）は `args`（clap）を `use` しません。`HeadlessRequest` を受け取り、入力（クリップボード・標準入力）は `InputEnv`、クライアント検出は `TargetCatalog`、ファイルとサブプロセスは `TargetIo` で受けます。`Args` からの変換は `src/args.rs`、OS の実体の配線は `src/entry.rs` に置いてください。
 - マージ時は対象クライアントの MCP 設定だけを更新し、他の設定や未知のフィールドを保ってください。
 
 ### モジュールの依存方向

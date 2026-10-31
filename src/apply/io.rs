@@ -1,6 +1,8 @@
 use crate::delegate::exec::run_invocations;
 use crate::delegate::plan::CliInvocation;
 use crate::delegate::CliError;
+use crate::discovery::detect_client_targets;
+use crate::domain::ClientTarget;
 use crate::writer::{self, WriteError};
 use std::path::Path;
 
@@ -39,5 +41,20 @@ impl TargetIo for SystemIo {
 
     fn run_cli(&self, invocations: &[CliInvocation]) -> Result<(), CliError> {
         run_invocations(invocations)
+    }
+}
+
+/// Where the clients' config files are expected to be (injectable for tests).
+pub trait TargetCatalog {
+    /// Every known target, existing or not, as the GUI lists them.
+    fn targets(&self) -> Vec<ClientTarget>;
+}
+
+/// The clients detected on this machine.
+pub struct SystemCatalog;
+
+impl TargetCatalog for SystemCatalog {
+    fn targets(&self) -> Vec<ClientTarget> {
+        detect_client_targets(None)
     }
 }

@@ -1,7 +1,12 @@
 //! Resolving where the snippet text comes from.
 
-use super::Environment;
 use std::path::Path;
+
+/// Where snippet text can come from besides files and the command line (injectable for tests).
+pub trait InputEnv {
+    fn clipboard_text(&self) -> Option<String>;
+    fn stdin_text(&self) -> std::io::Result<String>;
+}
 
 /// Where the snippet text came from (decides the wording of a parse error).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -16,7 +21,7 @@ pub enum InputSource {
 /// anything else = the JSON text itself.
 pub fn read_input(
     input: Option<&str>,
-    env: &dyn Environment,
+    env: &dyn InputEnv,
 ) -> Result<(String, InputSource), String> {
     match input {
         None => env

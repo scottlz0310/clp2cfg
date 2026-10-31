@@ -1,68 +1,39 @@
 //! Headless (no window) apply / dry-run, shared by `clp2cfg --apply` and `clp2cfg-cli`.
+//!
+//! The run is described by a [`HeadlessRequest`]; the outside world comes in through
+//! [`InputEnv`], [`TargetCatalog`] and [`TargetIo`], so nothing here knows about the command line.
 
 mod input;
 mod report;
+mod request;
 mod select;
 
-use crate::apply::{SystemIo, TargetIo};
-use crate::args::{Args, HeadlessAction, Mode};
-use crate::discovery::detect_client_targets;
-use crate::domain::ClientTarget;
-use crate::snippet::filter::FilterOptions;
+use crate::apply::{TargetCatalog, TargetIo};
 use crate::snippet::pipeline::{prepare, Prepared};
 use crate::snippet::placeholder::EnvOverrides;
 use report::{apply, dry_run};
 use select::select_targets;
 
-pub use input::{read_input, InputSource};
+pub use input::{read_input, InputEnv, InputSource};
 pub use report::{Report, EXIT_FAILED, EXIT_OK, EXIT_USAGE};
+pub use request::{HeadlessAction, HeadlessRequest};
 
-/// What the headless run needs from the outside world (injectable for tests).
-pub trait Environment {
-    fn clipboard_text(&self) -> Option<String>;
-    fn stdin_text(&self) -> std::io::Result<String>;
-    /// Every known target (existing or not), as the GUI would list them.
-    fn targets(&self) -> Vec<ClientTarget>;
-    /// Config files and CLI subprocesses.
-    fn io(&self) -> &dyn TargetIo;
-}
-
-/// The real environment: OS clipboard, standard input, detected clients, real CLI processes.
-pub struct SystemEnvironment;
-
-impl Environment for SystemEnvironment {
-    fn clipboard_text(&self) -> Option<String> {
-        arboard::Clipboard::new().ok()?.get_text().ok()
-    }
-
-    fn stdin_text(&self) -> std::io::Result<String> {
-        std::io::read_to_string(std::io::stdin())
-    }
-
-    fn targets(&self) -> Vec<ClientTarget> {
-        detect_client_targets(None)
-    }
-
-    fn io(&self) -> &dyn TargetIo {
-        &SystemIo
-    }
-}
-
-/// Run a headless apply or dry-run described by `args`.
-pub fn run(args: &Args, env: &dyn Environment) -> Report {
-    let Mode::Headless(action) = args.mode() else {
-        return Report::usage("--apply または --dry-run を指定してください");
-    };
-
+/// Run a headless apply or dry-run.
+pub fn run(
+    request: &HeadlessRequest,
+    input: &dyn InputEnv,
+    catalog: &dyn TargetCatalog,
+    io: &dyn TargetIo,
+) -> Report {
     let Prepared {
         servers,
         placeholders,
-    } = match load_servers(args, env) {
+    } = match load_servers(request, input) {
         Ok(prepared) => prepared,
         Err(message) => return Report::usage(message),
     };
 
-    if !args.allow_placeholders && !placeholders.is_empty() {
+    if !request.allow_placeholders && !placeholders.is_empty() {
         let list = placeholders
             .iter()
             .map(|p| format!("{} / {}", p.server, p.key))
@@ -74,20 +45,20 @@ pub fn run(args: &Args, env: &dyn Environment) -> Report {
         ));
     }
 
-    let targets = match select_targets(&args.targets, env.targets()) {
+    let targets = match select_targets(&request.targets, catalog.targets()) {
         Ok(targets) => targets,
         Err(message) => return Report::usage(message),
     };
 
-    match action {
-        HeadlessAction::DryRun => dry_run(&servers, &targets, args.show_secrets, env.io()),
-        HeadlessAction::Apply => apply(&servers, &targets, env.io()),
+    match request.action {
+        HeadlessAction::DryRun => dry_run(&servers, &targets, request.show_secrets, io),
+        HeadlessAction::Apply => apply(&servers, &targets, io),
     }
 }
 
-fn load_servers(args: &Args, env: &dyn Environment) -> Result<Prepared, String> {
-    let (text, source) = read_input(args.input.as_deref(), env)?;
-    prepare(&text, &FilterOptions::from(args), &EnvOverrides::new()).map_err(|e| match source {
+fn load_servers(request: &HeadlessRequest, input: &dyn InputEnv) -> Result<Prepared, String> {
+    let (text, source) = read_input(request.input.as_deref(), input)?;
+    prepare(&text, &request.filters, &EnvOverrides::new()).map_err(|e| match source {
         InputSource::Literal => {
             format!("入力を解釈できません（ファイルが存在せず、JSON としても無効です）: {e}")
         }
@@ -98,9 +69,11 @@ fn load_servers(args: &Args, env: &dyn Environment) -> Result<Prepared, String> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::apply::SystemIo;
+    use crate::args::Args;
     use crate::delegate::plan::CliInvocation;
     use crate::delegate::CliError;
-    use crate::domain::ClientTargetKind;
+    use crate::domain::{ClientTarget, ClientTargetKind};
     use crate::writer::WriteError;
     use std::cell::RefCell;
     use std::path::Path;
@@ -126,18 +99,18 @@ mod tests {
         }
     }
 
-    impl Environment for FakeEnv {
+    impl InputEnv for FakeEnv {
         fn clipboard_text(&self) -> Option<String> {
             self.clipboard.clone()
         }
         fn stdin_text(&self) -> std::io::Result<String> {
             Ok(self.stdin.clone())
         }
+    }
+
+    impl TargetCatalog for FakeEnv {
         fn targets(&self) -> Vec<ClientTarget> {
             self.targets.clone()
-        }
-        fn io(&self) -> &dyn TargetIo {
-            self
         }
     }
 
@@ -186,6 +159,12 @@ mod tests {
         ClientTarget::new_cli(kind, Some(std::path::PathBuf::from("fake-cli")))
     }
 
+    /// What the binaries do: the arguments become a request, then the run.
+    fn run_args(args: &Args, env: &FakeEnv) -> Report {
+        let request = HeadlessRequest::try_from(args).unwrap();
+        run(&request, env, env, env)
+    }
+
     fn args(extra: &[&str]) -> Args {
         use clap::Parser;
         Args::try_parse_from(std::iter::once("clp2cfg").chain(extra.iter().copied())).unwrap()
@@ -205,7 +184,7 @@ mod tests {
         );
         let env = FakeEnv::new(vec![target.clone()]);
 
-        let report = run(&args(&["--dry-run", SNIPPET]), &env);
+        let report = run_args(&args(&["--dry-run", SNIPPET]), &env);
 
         assert_eq!(report.exit_code, EXIT_OK, "{report:?}");
         assert!(report.stdout.contains("~ srv  上書き"), "{}", report.stdout);
@@ -221,7 +200,7 @@ mod tests {
         let env = FakeEnv::new(vec![target, cli_target(ClientTargetKind::CodexCli)]);
         let snippet = r#"{"srv":{"command":"node","env":{"API_KEY":"sk-secret-value"}}}"#;
 
-        let masked = run(
+        let masked = run_args(
             &args(&["--dry-run", "--target", "cursor,codex-cli", snippet]),
             &env,
         );
@@ -235,7 +214,7 @@ mod tests {
         // CLI のコマンドも伏せる
         assert!(masked.stdout.contains("API_KEY=***"), "{}", masked.stdout);
 
-        let shown = run(
+        let shown = run_args(
             &args(&[
                 "--dry-run",
                 "--show-secrets",
@@ -273,7 +252,7 @@ mod tests {
             cli_target(ClientTargetKind::ClaudeCli),
         ]);
 
-        let report = run(&args(&["--apply", SNIPPET]), &env);
+        let report = run_args(&args(&["--apply", SNIPPET]), &env);
 
         assert_eq!(report.exit_code, EXIT_OK, "{report:?}");
         assert!(std::fs::read_to_string(&existing.path)
@@ -307,7 +286,7 @@ mod tests {
             let target = crate::discovery::file_target(ClientTargetKind::Cursor, target.path);
             let env = FakeEnv::new(vec![target.clone()]);
 
-            let report = run(&args(&[flag, SNIPPET]), &env);
+            let report = run_args(&args(&[flag, SNIPPET]), &env);
 
             assert_eq!(report.exit_code, EXIT_FAILED, "{flag}: {report:?}");
             assert!(
@@ -331,7 +310,7 @@ mod tests {
         let snippet =
             r#"{"srv":{"command":"node","args":["-e","X=1"],"env":{"K":"sk-secret-value"}}}"#;
 
-        let report = run(
+        let report = run_args(
             &args(&["--dry-run", "--target", "claude-cli", snippet]),
             &env,
         );
@@ -362,7 +341,7 @@ mod tests {
             cli_target(ClientTargetKind::CodexCli),
         ]);
 
-        let report = run(
+        let report = run_args(
             &args(&["--apply", "--target", "cursor,codex-cli", SNIPPET]),
             &env,
         );
@@ -393,7 +372,7 @@ mod tests {
             cli_target(ClientTargetKind::ClaudeCli),
         ]);
 
-        let report = run(
+        let report = run_args(
             &args(&[
                 "--apply",
                 "--target",
@@ -423,7 +402,7 @@ mod tests {
             r#"{"srv":{"command":"node","env":{"TOKEN":"YOUR_API_KEY","REGION":"us-east-1"}}}"#;
 
         for mode in ["--apply", "--dry-run"] {
-            let blocked = run(&args(&[mode, snippet]), &env);
+            let blocked = run_args(&args(&[mode, snippet]), &env);
             assert_eq!(blocked.exit_code, EXIT_USAGE, "{mode}: {blocked:?}");
             assert!(blocked.stderr.contains("srv / TOKEN"), "{}", blocked.stderr);
             assert!(
@@ -434,7 +413,7 @@ mod tests {
         }
         assert_eq!(std::fs::read_to_string(&target.path).unwrap(), "{}");
 
-        let allowed = run(&args(&["--apply", "--allow-placeholders", snippet]), &env);
+        let allowed = run_args(&args(&["--apply", "--allow-placeholders", snippet]), &env);
         assert_eq!(allowed.exit_code, EXIT_OK, "{allowed:?}");
         assert!(std::fs::read_to_string(&target.path)
             .unwrap()
@@ -459,7 +438,7 @@ mod tests {
             ("clipboard", vec!["--dry-run"]),
         ];
         for (name, argv) in cases {
-            let report = run(&args(&argv), &env);
+            let report = run_args(&args(&argv), &env);
             assert_eq!(report.exit_code, EXIT_OK, "{name}: {report:?}");
             assert!(report.stdout.contains("srv"), "{name}: {}", report.stdout);
         }
@@ -502,12 +481,6 @@ mod tests {
                 use_env_without_existing_target: true,
                 expected_stderr: "--target で指定してください",
             },
-            Case {
-                name: "GUI mode is not handled here",
-                argv: vec![SNIPPET],
-                use_env_without_existing_target: false,
-                expected_stderr: "--apply または --dry-run",
-            },
         ];
 
         for case in cases {
@@ -516,7 +489,7 @@ mod tests {
             } else {
                 &env
             };
-            let report = run(&args(&case.argv), used);
+            let report = run_args(&args(&case.argv), used);
             assert_eq!(report.exit_code, EXIT_USAGE, "{}: {report:?}", case.name);
             assert!(
                 report.stderr.contains(case.expected_stderr),
@@ -542,7 +515,7 @@ mod tests {
         let mut argv = args(&["--apply", SNIPPET]);
         argv.targets = vec!["notepad".to_string()];
 
-        let report = run(&argv, &env);
+        let report = run_args(&argv, &env);
 
         assert_eq!(report.exit_code, EXIT_USAGE);
         assert!(
@@ -569,7 +542,7 @@ mod tests {
         );
         let env = FakeEnv::new(vec![broken.clone(), good.clone()]);
 
-        let report = run(&args(&["--apply", SNIPPET]), &env);
+        let report = run_args(&args(&["--apply", SNIPPET]), &env);
 
         assert_eq!(report.exit_code, EXIT_FAILED, "{report:?}");
         assert!(report.stderr.contains("Windsurf"), "{}", report.stderr);
@@ -583,7 +556,7 @@ mod tests {
         let mut env = FakeEnv::new(vec![cli_target(ClientTargetKind::CodexCli)]);
         env.cli_fails = true;
 
-        let report = run(&args(&["--apply", "--target", "codex-cli", SNIPPET]), &env);
+        let report = run_args(&args(&["--apply", "--target", "codex-cli", SNIPPET]), &env);
 
         assert_eq!(report.exit_code, EXIT_FAILED, "{report:?}");
         assert!(report.stderr.contains("Codex CLI"), "{}", report.stderr);
@@ -596,7 +569,7 @@ mod tests {
         let env = FakeEnv::new(vec![target.clone()]);
         let snippet = r#"{"a":{"command":"npx","args":["-y","pkg"]},"b":{"command":"pipx","args":["run","tool"]}}"#;
 
-        run(&args(&["--apply", snippet]), &env);
+        run_args(&args(&["--apply", snippet]), &env);
         let content = std::fs::read_to_string(&target.path).unwrap();
         assert!(
             content.contains("\"bunx\"") && content.contains("\"uvx\""),
@@ -604,7 +577,7 @@ mod tests {
         );
 
         std::fs::write(&target.path, "{}").unwrap();
-        run(
+        run_args(
             &args(&["--apply", "--no-npx-to-bunx", "--no-pipx-to-uvx", snippet]),
             &env,
         );
@@ -646,8 +619,8 @@ mod tests {
                 let mut stdin_env = FakeEnv::new(env.targets.clone());
                 stdin_env.stdin = input.to_string();
                 for report in [
-                    run(&args(&[mode, input]), &env),
-                    run(&args(&[mode, "-"]), &stdin_env),
+                    run_args(&args(&[mode, input]), &env),
+                    run_args(&args(&[mode, "-"]), &stdin_env),
                 ] {
                     assert_eq!(report.exit_code, EXIT_USAGE, "{mode}: {report:?}");
                     assert!(

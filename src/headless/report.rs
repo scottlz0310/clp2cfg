@@ -26,7 +26,7 @@ pub struct Report {
 }
 
 impl Report {
-    pub(super) fn usage(message: impl Into<String>) -> Self {
+    pub fn usage(message: impl Into<String>) -> Self {
         Self {
             exit_code: EXIT_USAGE,
             stdout: String::new(),

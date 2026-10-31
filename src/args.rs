@@ -1,9 +1,11 @@
 //! GUI 版（`clp2cfg`）とコンソール版（`clp2cfg-cli`）で共通の起動引数。
 
 use crate::domain::ClientTargetKind;
+use crate::headless::{HeadlessAction, HeadlessRequest};
 use crate::snippet::filter::FilterOptions;
 use clap::builder::PossibleValuesParser;
 use clap::{ArgGroup, Parser};
+use thiserror::Error;
 
 /// MCP サーバー設定のスニペットを、AI クライアントの設定ファイルへマージします。
 ///
@@ -54,13 +56,6 @@ pub struct Args {
     pub no_pipx_to_uvx: bool,
 }
 
-/// What a headless run does.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum HeadlessAction {
-    Apply,
-    DryRun,
-}
-
 /// Whether the arguments ask for the GUI or a headless run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
@@ -74,6 +69,29 @@ impl From<&Args> for FilterOptions {
             replace_npx_with_bunx: !args.no_npx_to_bunx,
             replace_pipx_with_uvx: !args.no_pipx_to_uvx,
         }
+    }
+}
+
+/// The arguments ask for the GUI, so there is no headless run to describe.
+#[derive(Debug, Error, PartialEq, Eq)]
+#[error("--apply または --dry-run を指定してください")]
+pub struct NoHeadlessAction;
+
+impl TryFrom<&Args> for HeadlessRequest {
+    type Error = NoHeadlessAction;
+
+    fn try_from(args: &Args) -> Result<Self, NoHeadlessAction> {
+        let Mode::Headless(action) = args.mode() else {
+            return Err(NoHeadlessAction);
+        };
+        Ok(Self {
+            input: args.input.clone(),
+            action,
+            targets: args.targets.clone(),
+            show_secrets: args.show_secrets,
+            allow_placeholders: args.allow_placeholders,
+            filters: FilterOptions::from(args),
+        })
     }
 }
 
@@ -223,6 +241,48 @@ mod tests {
         assert!(args.no_npx_to_bunx && args.no_pipx_to_uvx);
     }
 
+    #[test]
+    fn test_headless_request_carries_every_flag() {
+        let args = parse(&[
+            "--apply",
+            "--target",
+            "cursor,windsurf",
+            "--allow-placeholders",
+            "--no-pipx-to-uvx",
+            "snippet.json",
+        ])
+        .unwrap();
+
+        assert_eq!(
+            HeadlessRequest::try_from(&args),
+            Ok(HeadlessRequest {
+                input: Some("snippet.json".to_string()),
+                action: HeadlessAction::Apply,
+                targets: vec!["cursor".to_string(), "windsurf".to_string()],
+                show_secrets: false,
+                allow_placeholders: true,
+                filters: FilterOptions {
+                    replace_npx_with_bunx: true,
+                    replace_pipx_with_uvx: false,
+                },
+            })
+        );
+        let dry = parse(&["--dry-run", "--show-secrets"]).unwrap();
+        let request = HeadlessRequest::try_from(&dry).unwrap();
+        assert_eq!(request.action, HeadlessAction::DryRun);
+        assert!(request.show_secrets && request.input.is_none());
+    }
+
+    #[test]
+    fn test_gui_arguments_have_no_headless_request() {
+        let error = HeadlessRequest::try_from(&parse(&["{}"]).unwrap()).unwrap_err();
+
+        assert_eq!(error, NoHeadlessAction);
+        assert_eq!(
+            error.to_string(),
+            "--apply または --dry-run を指定してください"
+        );
+    }
     #[test]
     fn test_target_names_round_trip() {
         let mut seen = std::collections::HashSet::new();
