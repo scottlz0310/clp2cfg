@@ -464,6 +464,105 @@ mod tests {
         }
     }
 
+    /// 検出結果の並び順と、種類ごとの保存先（ホームや設定ディレクトリからの相対パス）を固定する
+    #[test]
+    fn test_detect_client_targets_order_and_paths() {
+        let home = dirs::home_dir().expect("home dir");
+        let data_dir = dirs::data_dir().expect("data dir");
+        let vscode_user = if cfg!(target_os = "windows") {
+            data_dir.join("Code").join("User")
+        } else if cfg!(target_os = "macos") {
+            home.join("Library")
+                .join("Application Support")
+                .join("Code")
+                .join("User")
+        } else {
+            dirs::config_dir()
+                .expect("config dir")
+                .join("Code")
+                .join("User")
+        };
+        let storage = vscode_user.join("globalStorage");
+        let zed = if cfg!(target_os = "windows") {
+            data_dir.join("Zed")
+        } else {
+            home.join(".config").join("zed")
+        };
+
+        let project = tempfile::tempdir().unwrap();
+        let dot_mcp = project.path().join(".mcp.json");
+        let plain_mcp = project.path().join("mcp.json");
+
+        let targets = detect_client_targets(Some(project.path()));
+        assert_eq!(
+            targets.iter().map(|t| t.kind).collect::<Vec<_>>(),
+            ClientTargetKind::ALL,
+            "ALL と同じ並び順"
+        );
+        let path_of = |kind| {
+            targets
+                .iter()
+                .find(|t| t.kind == kind)
+                .map(|t| t.path.clone())
+                .unwrap()
+        };
+        assert_eq!(path_of(ClientTargetKind::Claude), home.join(".claude.json"));
+        assert_eq!(
+            path_of(ClientTargetKind::Cursor),
+            home.join(".cursor").join("mcp.json")
+        );
+        assert_eq!(
+            path_of(ClientTargetKind::VsCode),
+            vscode_user.join("settings.json")
+        );
+        assert_eq!(
+            path_of(ClientTargetKind::Project),
+            dot_mcp,
+            "既定は .mcp.json"
+        );
+        assert_eq!(
+            path_of(ClientTargetKind::Windsurf),
+            home.join(".codeium")
+                .join("windsurf")
+                .join("mcp_config.json")
+        );
+        assert_eq!(
+            path_of(ClientTargetKind::Cline),
+            storage
+                .join("saoudrizwan.claude-dev")
+                .join("settings")
+                .join("cline_mcp_settings.json")
+        );
+        assert_eq!(
+            path_of(ClientTargetKind::RooCode),
+            storage
+                .join("rooveterinaryinc.roo-cline")
+                .join("settings")
+                .join("mcp_settings.json")
+        );
+        assert_eq!(path_of(ClientTargetKind::Zed), zed.join("settings.json"));
+
+        // CLI 種は PATH 上の実行ファイル（見つからなければ裸の名前）。名前と存在判定の整合だけを見る
+        for target in targets.iter().filter(|t| t.kind.cli_program().is_some()) {
+            let program = target.kind.cli_program().unwrap();
+            assert_eq!(target.exists, target.selected, "{:?}", target.kind);
+            assert_eq!(target.exists, find_in_path(program).is_some());
+            if !target.exists {
+                assert_eq!(target.path, std::path::PathBuf::from(program));
+            }
+        }
+
+        // `mcp.json` があればそちらを使う
+        std::fs::write(&plain_mcp, "{}").unwrap();
+        let targets = detect_client_targets(Some(project.path()));
+        let project_target = targets
+            .iter()
+            .find(|t| t.kind == ClientTargetKind::Project)
+            .unwrap();
+        assert_eq!(project_target.path, plain_mcp);
+        assert!(project_target.exists && project_target.selected);
+    }
+
     #[test]
     fn test_detect_targets_non_empty() {
         let targets = detect_client_targets(None);
