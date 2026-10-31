@@ -109,6 +109,9 @@ const FILE_LAYERS: &[(&str, Layer)] = &[
     ("apply::undo", Layer::Apply),
     ("args", Layer::CliFrontend),
     ("headless", Layer::CliFrontend),
+    ("headless::input", Layer::CliFrontend),
+    ("headless::report", Layer::CliFrontend),
+    ("headless::select", Layer::CliFrontend),
     ("app", Layer::GuiFrontend),
     ("entry", Layer::Entry),
 ];
