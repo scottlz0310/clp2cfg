@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- 既存の設定ファイルを読み取れない（UTF-16 や不正な UTF-8 など）とき、空のファイルとして扱って他の設定を消して上書きしていた問題を修正。原因つきのエラーとして当該ターゲットを失敗させ、何も書き込まない（#58）
+
 ## [0.2.0] - 2026-10-30
 
 ### Fixed
