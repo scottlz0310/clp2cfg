@@ -1813,6 +1813,80 @@ mod tests {
         (app, path)
     }
 
+    /// 適用のステータスメッセージの書式と、取り消し用の記録の中身を固定する
+    #[test]
+    fn test_apply_status_messages_and_last_apply_record() {
+        let temp = tempdir().unwrap();
+        let existing = temp.path().join("existing.json");
+        std::fs::write(&existing, r#"{"keep":1}"#).unwrap();
+        let mut ok_existing =
+            crate::discovery::file_target(ClientTargetKind::Cursor, existing.clone());
+        ok_existing.selected = true;
+        let mut ok_new =
+            crate::discovery::file_target(ClientTargetKind::Windsurf, temp.path().join("new.json"));
+        ok_new.selected = true;
+        // 親パスがファイルのため、書き込みが必ず失敗する
+        let blocking = temp.path().join("blocking_file");
+        std::fs::write(&blocking, "x").unwrap();
+        let mut bad =
+            crate::discovery::file_target(ClientTargetKind::Cline, blocking.join("mcp.json"));
+        bad.selected = true;
+
+        let mut app = Clp2cfgApp::new_with_targets(vec![ok_existing, ok_new, bad]);
+        app.auto_read_clipboard = false;
+        app.raw_input = r#"{"test":{"command":"echo"}}"#.to_string();
+        app.reparse();
+
+        app.apply_all(true);
+        let (dry, is_err) = app.status_message.clone().unwrap();
+        assert!(!is_err);
+        assert_eq!(
+            dry,
+            "[Dry-Run] 適用完了: 3 件 (Cursor(検証OK), Windsurf(検証OK), Cline (VS Code)(検証OK))"
+        );
+        assert!(app.last_apply.is_none(), "Dry-Run は記録を作らない");
+
+        app.apply_all(false);
+        let (message, is_err) = app.status_message.clone().unwrap();
+        assert!(is_err);
+        assert!(
+            message.starts_with("一部失敗: 成功 2 件, 失敗 1 件 (Cline (VS Code): "),
+            "{message}"
+        );
+
+        // 取り消し用の記録: 書き込めた 2 件だけ。新規作成かどうか、書いた内容を持つ
+        let last = app.last_apply.as_ref().unwrap();
+        assert_eq!(last.files.len(), 2);
+        let by_name = |name: &str| last.files.iter().find(|f| f.target_name == name).unwrap();
+        let updated = by_name("Cursor");
+        assert_eq!(updated.path, existing);
+        assert!(updated.had_original);
+        assert_eq!(updated.written, std::fs::read_to_string(&existing).unwrap());
+        let created = by_name("Windsurf");
+        assert!(!created.had_original);
+        assert_eq!(
+            created.written,
+            std::fs::read_to_string(&created.path).unwrap()
+        );
+        assert!(last.cli_targets.is_empty());
+
+        // 書き込めたターゲットは「既存」になる
+        assert!(app.target_entries[1].target.exists);
+        assert!(!app.target_entries[2].target.exists);
+    }
+
+    #[test]
+    fn test_apply_success_message_lists_every_target() {
+        let temp = tempdir().unwrap();
+        let (mut app, _path) = app_with_file_target(temp.path(), None);
+
+        app.apply_all(false);
+
+        let (message, is_err) = app.status_message.clone().unwrap();
+        assert!(!is_err);
+        assert_eq!(message, "適用完了: 1 件 (Cursor)");
+    }
+
     #[test]
     fn test_undo_removes_file_created_by_apply() {
         let temp = tempdir().unwrap();

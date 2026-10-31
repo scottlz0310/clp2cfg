@@ -539,6 +539,61 @@ mod tests {
         }
     }
 
+    /// dry-run の CLI 計画は、env の値だけを伏せ、コマンド側の引数（`-e` など）は伏せない。
+    /// （`display_redacted` で代用するとコマンドの `-e KEY=val` まで伏せてしまうため、方式を固定する）
+    #[test]
+    fn test_dry_run_masks_env_values_but_not_command_arguments() {
+        let env = FakeEnv::new(vec![cli_target(ClientTargetKind::ClaudeCli)]);
+        let snippet =
+            r#"{"srv":{"command":"node","args":["-e","X=1"],"env":{"K":"sk-secret-value"}}}"#;
+
+        let report = run(
+            &args(&["--dry-run", "--target", "claude-cli", snippet]),
+            &env,
+        );
+
+        assert_eq!(report.exit_code, EXIT_OK, "{report:?}");
+        assert!(
+            report
+                .stdout
+                .contains("  $ fake-cli mcp add --scope user srv -e 'K=***' -- node -e X=1\n"),
+            "{}",
+            report.stdout
+        );
+        assert!(!report.stdout.contains("sk-secret-value"));
+    }
+
+    /// 適用の出力行（ファイルは判定の要約つき、CLI はコマンド数）を固定する
+    #[test]
+    fn test_apply_output_lines() {
+        let dir = tempdir().unwrap();
+        let existing = file_target(
+            dir.path(),
+            ClientTargetKind::Cursor,
+            "cursor.json",
+            Some(r#"{"mcpServers":{"srv":{"command":"old"},"other":{"command":"x"}}}"#),
+        );
+        let env = FakeEnv::new(vec![
+            existing.clone(),
+            cli_target(ClientTargetKind::CodexCli),
+        ]);
+
+        let report = run(
+            &args(&["--apply", "--target", "cursor,codex-cli", SNIPPET]),
+            &env,
+        );
+
+        assert_eq!(report.exit_code, EXIT_OK, "{report:?}");
+        assert_eq!(
+            report.stdout,
+            format!(
+                "[Cursor] 適用: {} (新規追加 0 / 上書き 1 / 変更なし 0)\n[Codex CLI] 実行: 1 コマンド\n\n適用完了: 2 件\n",
+                existing.path.display()
+            )
+        );
+        assert_eq!(report.stderr, "");
+    }
+
     #[test]
     fn test_apply_with_explicit_targets_creates_files_and_runs_cli() {
         let dir = tempdir().unwrap();
