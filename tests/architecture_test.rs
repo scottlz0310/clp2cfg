@@ -75,7 +75,9 @@ enum Layer {
     Apply,
     /// L4: コマンドライン frontend
     CliFrontend,
-    /// L4: GUI frontend
+    /// L4: GUI の状態と更新（画面・OS に触れない。クリップボードとファイルは port 経由）
+    GuiState,
+    /// L4: GUI frontend（egui への接続と OS の実装）
     GuiFrontend,
     /// L5: 配線
     Entry,
@@ -114,6 +116,11 @@ const FILE_LAYERS: &[(&str, Layer)] = &[
     ("headless::request", Layer::CliFrontend),
     ("headless::select", Layer::CliFrontend),
     ("app", Layer::GuiFrontend),
+    ("app::action", Layer::GuiState),
+    ("app::clipboard", Layer::GuiFrontend),
+    ("app::ports", Layer::GuiState),
+    ("app::state", Layer::GuiState),
+    ("app::system", Layer::GuiFrontend),
     ("entry", Layer::Entry),
 ];
 
@@ -132,6 +139,7 @@ fn forbidden_externals(layer: Layer) -> Vec<&'static str> {
         Layer::Platform => FRONTEND_CRATES.to_vec(),
         Layer::Apply => [FRONTEND_CRATES, &os].concat(),
         Layer::CliFrontend => vec!["egui", "eframe", "image"],
+        Layer::GuiState => [FRONTEND_CRATES, &os].concat(),
         Layer::GuiFrontend => vec!["clap"],
         Layer::Entry => vec![],
     }
@@ -146,7 +154,8 @@ fn may_depend_on(from: Layer, to: Layer) -> bool {
             (Pure, Domain)
                 | (Platform, Domain | Pure)
                 | (Apply, Domain | Pure | Platform)
-                | (CliFrontend | GuiFrontend, Domain | Pure | Apply)
+                | (CliFrontend | GuiState, Domain | Pure | Apply)
+                | (GuiFrontend, Domain | Pure | Apply | GuiState)
                 | (Entry, _)
         )
 }
@@ -167,11 +176,7 @@ struct Allowed {
 }
 
 /// 現状の違反。解消した PR が、その行を削除する。
-const ALLOWLIST: &[Allowed] = &[Allowed {
-    key: "app -> crate::discovery",
-    reason: "GUI がクライアント検出を直接呼ぶ（検出は entry が行い、frontend へ渡す）",
-    issue: "#66",
-}];
+const ALLOWLIST: &[Allowed] = &[];
 
 /// `src/` の対象ファイルを、キー（`app`、`frontend::gui::state` など）→ ソースで返す。
 fn collect_sources(dir: &Path) -> BTreeMap<String, String> {

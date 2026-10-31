@@ -76,6 +76,10 @@ impl TargetIo for FakeIo {
             .ok_or_else(|| std::io::Error::from(std::io::ErrorKind::NotFound))
     }
 
+    fn config_exists(&self, path: &Path) -> bool {
+        self.files.borrow().contains_key(path)
+    }
+
     fn run_cli(&self, invocations: &[CliInvocation]) -> Result<(), CliError> {
         self.cli_calls
             .borrow_mut()

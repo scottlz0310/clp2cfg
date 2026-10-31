@@ -128,6 +128,9 @@ mod tests {
         fn remove_config(&self, path: &Path) -> std::io::Result<()> {
             SystemIo.remove_config(path)
         }
+        fn config_exists(&self, path: &Path) -> bool {
+            SystemIo.config_exists(path)
+        }
         fn run_cli(&self, invocations: &[CliInvocation]) -> Result<(), CliError> {
             self.cli_calls
                 .borrow_mut()
