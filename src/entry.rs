@@ -3,6 +3,7 @@
 use crate::app::{load_app_icon, Clp2cfgApp, StartupOptions};
 use crate::args::{Args, Mode};
 use crate::headless::{read_input, run, SystemEnvironment};
+use crate::snippet::filter::FilterOptions;
 use clap::Parser;
 use std::io::Write;
 use std::process::ExitCode;
@@ -30,13 +31,14 @@ pub fn cli_main() -> ExitCode {
 fn run_gui(args: &Args) -> ExitCode {
     tracing_subscriber::fmt::init();
 
+    let filters = FilterOptions::from(args);
     let startup = StartupOptions {
         initial_input: args
             .input
             .as_deref()
             .map(|input| read_input(Some(input), &SystemEnvironment).map(|(text, _)| text)),
-        replace_npx_with_bunx: !args.no_npx_to_bunx,
-        replace_pipx_with_uvx: !args.no_pipx_to_uvx,
+        replace_npx_with_bunx: filters.replace_npx_with_bunx,
+        replace_pipx_with_uvx: filters.replace_pipx_with_uvx,
     };
 
     let mut viewport = egui::ViewportBuilder::default()

@@ -6,10 +6,10 @@ use crate::delegate::plan::{build_cli_invocations, CliInvocation};
 use crate::delegate::CliError;
 use crate::discovery::detect_client_targets;
 use crate::domain::{ClientTarget, ClientTargetKind, McpServersMap, ServerChange, TargetAction};
-use crate::filter::{apply_filters, FilterOptions};
-use crate::parser::parse_mcp_snippet;
-use crate::placeholder::find_placeholders;
 use crate::preview::{build_preview_with_changes, ServerChanges};
+use crate::snippet::filter::FilterOptions;
+use crate::snippet::pipeline::{prepare, Prepared};
+use crate::snippet::placeholder::EnvOverrides;
 use crate::writer::safe_atomic_write;
 use std::fmt::Write as _;
 use std::path::Path;
@@ -110,24 +110,24 @@ pub fn run(args: &Args, env: &dyn Environment) -> Report {
         return Report::usage("--apply または --dry-run を指定してください");
     };
 
-    let servers = match load_servers(args, env) {
-        Ok(servers) => servers,
+    let Prepared {
+        servers,
+        placeholders,
+    } = match load_servers(args, env) {
+        Ok(prepared) => prepared,
         Err(message) => return Report::usage(message),
     };
 
-    if !args.allow_placeholders {
-        let placeholders = find_placeholders(&servers);
-        if !placeholders.is_empty() {
-            let list = placeholders
-                .iter()
-                .map(|p| format!("{} / {}", p.server, p.key))
-                .collect::<Vec<_>>()
-                .join(", ");
-            return Report::usage(format!(
-                "未入力のプレースホルダーが {} 件残っています（{list}）。実値に置き換えるか、--allow-placeholders を指定してください",
-                placeholders.len()
-            ));
-        }
+    if !args.allow_placeholders && !placeholders.is_empty() {
+        let list = placeholders
+            .iter()
+            .map(|p| format!("{} / {}", p.server, p.key))
+            .collect::<Vec<_>>()
+            .join(", ");
+        return Report::usage(format!(
+            "未入力のプレースホルダーが {} 件残っています（{list}）。実値に置き換えるか、--allow-placeholders を指定してください",
+            placeholders.len()
+        ));
     }
 
     let targets = match select_targets(&args.targets, env.targets()) {
@@ -141,23 +141,14 @@ pub fn run(args: &Args, env: &dyn Environment) -> Report {
     }
 }
 
-fn load_servers(args: &Args, env: &dyn Environment) -> Result<McpServersMap, String> {
+fn load_servers(args: &Args, env: &dyn Environment) -> Result<Prepared, String> {
     let (text, source) = read_input(args.input.as_deref(), env)?;
-    let servers = parse_mcp_snippet(&text).map_err(|e| match source {
+    prepare(&text, &FilterOptions::from(args), &EnvOverrides::new()).map_err(|e| match source {
         InputSource::Literal => {
             format!("入力を解釈できません（ファイルが存在せず、JSON としても無効です）: {e}")
         }
         _ => format!("入力を解釈できません: {e}"),
-    })?;
-
-    let options = FilterOptions {
-        replace_npx_with_bunx: !args.no_npx_to_bunx,
-        replace_pipx_with_uvx: !args.no_pipx_to_uvx,
-    };
-    Ok(servers
-        .into_iter()
-        .map(|(name, config)| (name, apply_filters(config, &options)))
-        .collect())
+    })
 }
 
 /// Without `--target`: every existing file target (CLI-delegated clients run only when named).
