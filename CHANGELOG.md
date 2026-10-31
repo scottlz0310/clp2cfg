@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-31
+
 ### Changed
 
 - モジュール間の依存方向を検査するアーキテクチャテストを追加（内部変更）。層の表と、現状の違反を固定した許可リストで、新しい違反と解消し忘れの両方を検出する（#59）
@@ -137,6 +139,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `Cargo.toml` の `[dev-dependencies]` から重複していた `tempfile` を削除
 
-[Unreleased]: https://github.com/scottlz0310/clp2cfg/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/scottlz0310/clp2cfg/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/scottlz0310/clp2cfg/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/scottlz0310/clp2cfg/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/scottlz0310/clp2cfg/releases/tag/v0.1.0
