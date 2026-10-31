@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - モジュール間の依存方向を検査するアーキテクチャテストを追加（内部変更）。層の表と、現状の違反を固定した許可リストで、新しい違反と解消し忘れの両方を検出する（#59）
+- `model.rs` を `domain/`（サーバー定義・クライアント定義・変更判定）に分割し、エラー型（`ParseError` / `MergeError` / `WriteError` / `CliError`）を発生元のモジュールへ移動（内部変更。挙動は不変）（#60）
 
 ### Fixed
 

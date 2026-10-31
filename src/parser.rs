@@ -1,7 +1,24 @@
 //! Loose JSON parser for MCP server snippets.
 
-use crate::model::{McpServersMap, NormalizedServerConfig, ParseError};
+use crate::domain::{McpServersMap, NormalizedServerConfig};
 use serde_json::Value;
+use thiserror::Error;
+
+/// Error types occurring during snippet parsing.
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum ParseError {
+    #[error("Empty input provided")]
+    EmptyInput,
+
+    #[error("No valid JSON structure found in input")]
+    NoJsonFound,
+
+    #[error("Failed to parse JSON/JSON5 snippet: {0}")]
+    SyntaxError(String),
+
+    #[error("Invalid MCP configuration format: {0}")]
+    InvalidFormat(String),
+}
 
 /// Extracts JSON substring from raw text, removing Markdown code fences and external text.
 pub fn extract_json_candidate(input: &str) -> Result<&str, ParseError> {

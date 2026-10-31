@@ -1,6 +1,6 @@
 //! GUI 版（`clp2cfg`）とコンソール版（`clp2cfg-cli`）で共通の起動引数。
 
-use crate::model::ClientTargetKind;
+use crate::domain::ClientTargetKind;
 use clap::builder::PossibleValuesParser;
 use clap::{ArgGroup, Parser};
 

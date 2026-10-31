@@ -1,31 +1,26 @@
 //! AST merger for various AI client configuration formats.
 
 use crate::cli::find_in_path;
-use crate::model::{ClientTarget, ClientTargetKind, McpServersMap, MergeError};
+use crate::domain::{ClientTarget, ClientTargetKind, McpServersMap, ServerChange};
 use serde_json::{Map, Value};
 use std::collections::BTreeMap;
 use std::path::Path;
+use thiserror::Error;
 
-/// How a server in the snippet relates to what the target file already contains.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ServerChange {
-    /// No server with this name exists yet.
-    New,
-    /// A server with this name exists and its definition would be replaced.
-    Updated,
-    /// A server with this name exists and already has exactly this definition.
-    Unchanged,
-}
+/// Error types occurring during target AST merge.
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum MergeError {
+    #[error("Failed to parse existing configuration JSON: {0}")]
+    InvalidExistingJson(String),
 
-impl ServerChange {
-    /// Display label (Japanese) shared by the GUI badges and the headless output.
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::New => "新規追加",
-            Self::Updated => "上書き",
-            Self::Unchanged => "変更なし",
-        }
-    }
+    #[error("Configuration root must be a JSON object")]
+    RootNotObject,
+
+    #[error("Failed to serialize merged configuration: {0}")]
+    SerializationFailed(String),
+
+    #[error("Target is applied via its CLI, not by file merge")]
+    NotFileTarget,
 }
 
 /// Detect standard client configuration targets on the host system.
@@ -179,7 +174,7 @@ fn servers_key(kind: ClientTargetKind) -> Result<&'static str, MergeError> {
 /// The JSON value written for one server (shared by merging and change detection so they agree).
 fn server_value(
     kind: ClientTargetKind,
-    config: &crate::model::NormalizedServerConfig,
+    config: &crate::domain::NormalizedServerConfig,
 ) -> Result<Value, MergeError> {
     let mut server_val =
         serde_json::to_value(config).map_err(|e| MergeError::SerializationFailed(e.to_string()))?;
@@ -276,7 +271,7 @@ pub fn merge_mcp_servers(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::NormalizedServerConfig;
+    use crate::domain::NormalizedServerConfig;
     use std::collections::BTreeMap;
 
     fn create_dummy_server(command: &str) -> NormalizedServerConfig {

@@ -1,7 +1,7 @@
 use crate::cli::{build_cli_invocations, run_invocations};
+use crate::domain::{ClientTarget, McpServersMap, ServerChange, TargetAction};
 use crate::filter::{apply_filters, FilterOptions};
-use crate::merger::{detect_client_targets, ServerChange};
-use crate::model::{ClientTarget, McpServersMap, TargetAction};
+use crate::merger::detect_client_targets;
 use crate::parser::parse_mcp_snippet;
 use crate::placeholder::{
     fill_placeholders, find_placeholders, is_placeholder, EnvOverrides, EnvRef,
@@ -1082,7 +1082,7 @@ pub fn load_app_icon() -> Option<egui::IconData> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{ClientTarget, ClientTargetKind};
+    use crate::domain::{ClientTarget, ClientTargetKind};
     use tempfile::tempdir;
 
     fn make_test_target(dir: &std::path::Path, kind: ClientTargetKind, file: &str) -> ClientTarget {

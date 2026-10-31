@@ -1,6 +1,6 @@
 //! Command and runtime filters (e.g., npx to bunx, pipx run to uvx replacement).
 
-use crate::model::NormalizedServerConfig;
+use crate::domain::NormalizedServerConfig;
 
 /// Options controlling command filters.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
