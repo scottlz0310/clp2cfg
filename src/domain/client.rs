@@ -286,8 +286,8 @@ pub struct ClientTarget {
 }
 
 impl ClientTarget {
-    pub fn new(kind: ClientTargetKind, path: PathBuf) -> Self {
-        let exists = path.is_file();
+    /// `exists` is whether the config file is already there (the caller checks; this stays pure).
+    pub fn new(kind: ClientTargetKind, path: PathBuf, exists: bool) -> Self {
         Self {
             name: kind.display_name().to_string(),
             kind,
@@ -422,6 +422,20 @@ mod tests {
 
         assert_eq!(cli_names.len(), ClientTargetKind::ALL.len());
         assert_eq!(display_names.len(), ClientTargetKind::ALL.len());
+    }
+
+    #[test]
+    fn test_client_target_new_takes_existence_from_the_caller() {
+        // 存在しないパスでも、渡された `exists` をそのまま使う（ファイルシステムを見ない）
+        let path = PathBuf::from("/definitely/not/a/real/path.json");
+
+        let present = ClientTarget::new(ClientTargetKind::Cursor, path.clone(), true);
+        let missing = ClientTarget::new(ClientTargetKind::Cursor, path.clone(), false);
+
+        assert!(present.exists && present.selected);
+        assert!(!missing.exists && !missing.selected);
+        assert_eq!(present.name, "Cursor");
+        assert_eq!(present.path, path);
     }
 
     #[test]

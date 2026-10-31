@@ -404,7 +404,7 @@ mod tests {
         if let Some(content) = content {
             std::fs::write(&path, content).unwrap();
         }
-        ClientTarget::new(kind, path)
+        crate::discovery::file_target(kind, path)
     }
 
     fn cli_target(kind: ClientTargetKind) -> ClientTarget {
@@ -529,7 +529,7 @@ mod tests {
             let dir = tempdir().unwrap();
             let target = file_target(dir.path(), ClientTargetKind::Cursor, "cursor.json", None);
             std::fs::write(&target.path, &bytes).unwrap();
-            let target = ClientTarget::new(ClientTargetKind::Cursor, target.path);
+            let target = crate::discovery::file_target(ClientTargetKind::Cursor, target.path);
             let env = FakeEnv::new(vec![target.clone()]);
 
             let report = run(&args(&[flag, SNIPPET]), &env);

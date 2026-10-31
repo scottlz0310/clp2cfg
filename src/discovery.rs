@@ -1,124 +1,122 @@
 //! Finds the AI clients on this machine: config file locations (per OS) and official CLIs on `PATH`.
 //! The environment and the file system are read here; the rest of the app receives `ClientTarget`s.
 
-use crate::domain::{ClientTarget, ClientTargetKind};
+use crate::domain::{ApplySpec, ClientTarget, ClientTargetKind};
 use std::path::{Path, PathBuf};
 
-/// Detect standard client configuration targets on the host system.
+/// Where the host keeps what clients write to (injectable for tests).
+#[derive(Default)]
+struct HostDirs {
+    home: Option<PathBuf>,
+    /// `%APPDATA%` on Windows.
+    data_dir: Option<PathBuf>,
+    config_dir: Option<PathBuf>,
+    /// The directory of the project-local target (the current directory unless given).
+    project_dir: Option<PathBuf>,
+}
+
+impl HostDirs {
+    fn detect(project_dir: Option<&Path>) -> Self {
+        Self {
+            home: dirs::home_dir(),
+            data_dir: dirs::data_dir(),
+            config_dir: dirs::config_dir(),
+            project_dir: project_dir
+                .map(Path::to_path_buf)
+                .or_else(|| std::env::current_dir().ok()),
+        }
+    }
+}
+
+/// Detect standard client configuration targets on the host system, in [`ClientTargetKind::ALL`] order.
 pub fn detect_client_targets(project_dir: Option<&Path>) -> Vec<ClientTarget> {
-    let mut targets = Vec::new();
-    let home = dirs::home_dir();
+    detect_with(&HostDirs::detect(project_dir), find_in_path)
+}
 
-    // 1. Claude Code / Desktop
-    if let Some(ref h) = home {
-        targets.push(ClientTarget::new(
-            ClientTargetKind::Claude,
-            h.join(".claude.json"),
-        ));
-    }
+fn detect_with(
+    dirs: &HostDirs,
+    find_program: impl Fn(&str) -> Option<PathBuf>,
+) -> Vec<ClientTarget> {
+    ClientTargetKind::ALL
+        .into_iter()
+        .filter_map(|kind| match &kind.spec().apply {
+            ApplySpec::File(_) => config_path(kind, dirs).map(|path| file_target(kind, path)),
+            ApplySpec::Cli(cli) => Some(ClientTarget::new_cli(kind, find_program(cli.program))),
+        })
+        .collect()
+}
 
-    // 2. Cursor
-    if let Some(ref h) = home {
-        targets.push(ClientTarget::new(
-            ClientTargetKind::Cursor,
-            h.join(".cursor").join("mcp.json"),
-        ));
-    }
+/// A file target; it exists (and is selected by default) when the config file is already there.
+pub(crate) fn file_target(kind: ClientTargetKind, path: PathBuf) -> ClientTarget {
+    let exists = path.is_file();
+    ClientTarget::new(kind, path, exists)
+}
 
-    // 3. VS Code Copilot settings.json
-    let vscode_user = vscode_user_dir(home.as_deref());
-    if let Some(ref dir) = vscode_user {
-        targets.push(ClientTarget::new(
-            ClientTargetKind::VsCode,
-            dir.join("settings.json"),
-        ));
-    }
-
-    // 4. Project Local (.mcp.json or mcp.json)
-    let cwd = std::env::current_dir().ok();
-    let base_dir = project_dir.or(cwd.as_deref());
-
-    if let Some(dir) = base_dir {
-        let dot_mcp = dir.join(".mcp.json");
-        let plain_mcp = dir.join("mcp.json");
-        let project_mcp_path = if plain_mcp.is_file() {
-            plain_mcp
-        } else {
-            dot_mcp
-        };
-        targets.push(ClientTarget::new(
-            ClientTargetKind::Project,
-            project_mcp_path,
-        ));
-    }
-
-    // 6. Windsurf
-    if let Some(ref h) = home {
-        targets.push(ClientTarget::new(
-            ClientTargetKind::Windsurf,
-            h.join(".codeium").join("windsurf").join("mcp_config.json"),
-        ));
-    }
-
-    // 7. Cline / 8. Roo Code (VS Code extensions, stored in globalStorage)
-    if let Some(ref dir) = vscode_user {
-        let storage = dir.join("globalStorage");
-        targets.push(ClientTarget::new(
-            ClientTargetKind::Cline,
-            storage
+/// Where a file target's configuration lives, or `None` when the host does not have the
+/// directory it lives under (or the kind is applied through its CLI).
+/// The only exhaustive `match` over the kinds besides `ClientTargetKind::spec`.
+fn config_path(kind: ClientTargetKind, dirs: &HostDirs) -> Option<PathBuf> {
+    let home = dirs.home.as_deref();
+    match kind {
+        ClientTargetKind::Claude => home.map(|h| h.join(".claude.json")),
+        ClientTargetKind::Cursor => home.map(|h| h.join(".cursor").join("mcp.json")),
+        ClientTargetKind::VsCode => vscode_user_dir(dirs).map(|d| d.join("settings.json")),
+        ClientTargetKind::Project => dirs.project_dir.as_deref().map(|dir| {
+            let plain_mcp = dir.join("mcp.json");
+            if plain_mcp.is_file() {
+                plain_mcp
+            } else {
+                dir.join(".mcp.json")
+            }
+        }),
+        ClientTargetKind::Windsurf => {
+            home.map(|h| h.join(".codeium").join("windsurf").join("mcp_config.json"))
+        }
+        // VS Code extensions keep their settings in globalStorage
+        ClientTargetKind::Cline => vscode_user_dir(dirs).map(|d| {
+            d.join("globalStorage")
                 .join("saoudrizwan.claude-dev")
                 .join("settings")
-                .join("cline_mcp_settings.json"),
-        ));
-        targets.push(ClientTarget::new(
-            ClientTargetKind::RooCode,
-            storage
+                .join("cline_mcp_settings.json")
+        }),
+        ClientTargetKind::RooCode => vscode_user_dir(dirs).map(|d| {
+            d.join("globalStorage")
                 .join("rooveterinaryinc.roo-cline")
                 .join("settings")
-                .join("mcp_settings.json"),
-        ));
+                .join("mcp_settings.json")
+        }),
+        ClientTargetKind::Zed => {
+            let zed_dir = if cfg!(target_os = "windows") {
+                dirs.data_dir.as_deref().map(|d| d.join("Zed"))
+            } else {
+                home.map(|h| h.join(".config").join("zed"))
+            };
+            zed_dir.map(|d| d.join("settings.json"))
+        }
+        ClientTargetKind::ClaudeCli
+        | ClientTargetKind::CodexCli
+        | ClientTargetKind::CopilotCli
+        | ClientTargetKind::AntigravityCli => None,
     }
-
-    // 9. Zed
-    let zed_dir = if cfg!(target_os = "windows") {
-        dirs::data_dir().map(|d| d.join("Zed"))
-    } else {
-        home.as_ref().map(|h| h.join(".config").join("zed"))
-    };
-    if let Some(dir) = zed_dir {
-        targets.push(ClientTarget::new(
-            ClientTargetKind::Zed,
-            dir.join("settings.json"),
-        ));
-    }
-
-    // 10. CLI delegation targets (detected on PATH)
-    for kind in [
-        ClientTargetKind::ClaudeCli,
-        ClientTargetKind::CodexCli,
-        ClientTargetKind::CopilotCli,
-        ClientTargetKind::AntigravityCli,
-    ] {
-        let resolved = kind.cli_program().and_then(find_in_path);
-        targets.push(ClientTarget::new_cli(kind, resolved));
-    }
-
-    targets
 }
 
 /// VS Code `User` directory (holds `settings.json` and `globalStorage`).
-fn vscode_user_dir(home: Option<&Path>) -> Option<std::path::PathBuf> {
+fn vscode_user_dir(dirs: &HostDirs) -> Option<PathBuf> {
     if cfg!(target_os = "windows") {
-        dirs::data_dir().map(|d| d.join("Code").join("User"))
+        dirs.data_dir
+            .as_deref()
+            .map(|d| d.join("Code").join("User"))
     } else if cfg!(target_os = "macos") {
-        home.map(|h| {
+        dirs.home.as_deref().map(|h| {
             h.join("Library")
                 .join("Application Support")
                 .join("Code")
                 .join("User")
         })
     } else {
-        dirs::config_dir().map(|c| c.join("Code").join("User"))
+        dirs.config_dir
+            .as_deref()
+            .map(|c| c.join("Code").join("User"))
     }
 }
 
@@ -169,6 +167,157 @@ fn is_executable_file(path: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn fake_dirs(project_dir: &Path) -> HostDirs {
+        HostDirs {
+            home: Some(PathBuf::from("/h")),
+            data_dir: Some(PathBuf::from("/d")),
+            config_dir: Some(PathBuf::from("/c")),
+            project_dir: Some(project_dir.to_path_buf()),
+        }
+    }
+
+    #[test]
+    fn test_config_path_for_every_client() {
+        use ClientTargetKind::*;
+        let project = tempfile::tempdir().unwrap();
+        let dirs = fake_dirs(project.path());
+        let home = PathBuf::from("/h");
+        let vscode_user = if cfg!(target_os = "windows") {
+            PathBuf::from("/d/Code/User")
+        } else if cfg!(target_os = "macos") {
+            home.join("Library/Application Support/Code/User")
+        } else {
+            PathBuf::from("/c/Code/User")
+        };
+        let zed = if cfg!(target_os = "windows") {
+            PathBuf::from("/d/Zed")
+        } else {
+            home.join(".config/zed")
+        };
+        let storage = vscode_user.join("globalStorage");
+
+        let expected = [
+            (Claude, Some(home.join(".claude.json"))),
+            (Cursor, Some(home.join(".cursor/mcp.json"))),
+            (VsCode, Some(vscode_user.join("settings.json"))),
+            (Project, Some(project.path().join(".mcp.json"))),
+            (
+                Windsurf,
+                Some(home.join(".codeium/windsurf/mcp_config.json")),
+            ),
+            (
+                Cline,
+                Some(storage.join("saoudrizwan.claude-dev/settings/cline_mcp_settings.json")),
+            ),
+            (
+                RooCode,
+                Some(storage.join("rooveterinaryinc.roo-cline/settings/mcp_settings.json")),
+            ),
+            (Zed, Some(zed.join("settings.json"))),
+            (ClaudeCli, None),
+            (CodexCli, None),
+            (CopilotCli, None),
+            (AntigravityCli, None),
+        ];
+
+        assert_eq!(
+            expected.clone().map(|(kind, _)| kind),
+            ClientTargetKind::ALL
+        );
+        for (kind, path) in expected {
+            assert_eq!(config_path(kind, &dirs), path, "{kind:?}");
+        }
+    }
+
+    #[test]
+    fn test_config_path_needs_the_host_directories() {
+        use ClientTargetKind::*;
+        let project = tempfile::tempdir().unwrap();
+        let only_project = HostDirs {
+            project_dir: Some(project.path().to_path_buf()),
+            ..HostDirs::default()
+        };
+
+        for kind in ClientTargetKind::ALL {
+            assert_eq!(config_path(kind, &HostDirs::default()), None, "{kind:?}");
+            assert_eq!(
+                config_path(kind, &only_project).is_some(),
+                kind == Project,
+                "{kind:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_project_target_prefers_an_existing_plain_mcp_json() {
+        let project = tempfile::tempdir().unwrap();
+        let dirs = fake_dirs(project.path());
+        let dot_mcp = project.path().join(".mcp.json");
+        let plain_mcp = project.path().join("mcp.json");
+
+        assert_eq!(
+            config_path(ClientTargetKind::Project, &dirs),
+            Some(dot_mcp.clone())
+        );
+
+        std::fs::write(&dot_mcp, "{}").unwrap();
+        assert_eq!(config_path(ClientTargetKind::Project, &dirs), Some(dot_mcp));
+
+        std::fs::write(&plain_mcp, "{}").unwrap();
+        assert_eq!(
+            config_path(ClientTargetKind::Project, &dirs),
+            Some(plain_mcp)
+        );
+    }
+
+    #[test]
+    fn test_detect_with_follows_all_and_resolves_cli_programs() {
+        let project = tempfile::tempdir().unwrap();
+        let find = |program: &str| (program == "claude").then(|| PathBuf::from("/bin/claude"));
+
+        let targets = detect_with(&fake_dirs(project.path()), find);
+
+        assert_eq!(
+            targets.iter().map(|t| t.kind).collect::<Vec<_>>(),
+            ClientTargetKind::ALL
+        );
+        let by_kind = |kind| targets.iter().find(|t| t.kind == kind).unwrap();
+        let claude = by_kind(ClientTargetKind::ClaudeCli);
+        assert_eq!(claude.path, PathBuf::from("/bin/claude"));
+        assert!(claude.exists && claude.selected);
+        let codex = by_kind(ClientTargetKind::CodexCli);
+        assert_eq!(codex.path, PathBuf::from("codex"), "未検出は裸の名前");
+        assert!(!codex.exists && !codex.selected);
+    }
+
+    #[test]
+    fn test_detect_with_skips_file_targets_without_host_directories() {
+        let targets = detect_with(&HostDirs::default(), |_| None);
+
+        assert_eq!(
+            targets.iter().map(|t| t.kind).collect::<Vec<_>>(),
+            [
+                ClientTargetKind::ClaudeCli,
+                ClientTargetKind::CodexCli,
+                ClientTargetKind::CopilotCli,
+                ClientTargetKind::AntigravityCli,
+            ]
+        );
+    }
+
+    #[test]
+    fn test_file_target_exists_and_is_selected_only_when_the_file_is_there() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("mcp.json");
+
+        let missing = file_target(ClientTargetKind::Cursor, path.clone());
+        std::fs::write(&path, "{}").unwrap();
+        let present = file_target(ClientTargetKind::Cursor, path);
+
+        assert!(!missing.exists && !missing.selected);
+        assert!(present.exists && present.selected);
+    }
 
     #[test]
     fn test_detect_targets_include_new_clients() {

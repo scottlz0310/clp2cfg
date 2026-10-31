@@ -1087,7 +1087,7 @@ mod tests {
     use tempfile::tempdir;
 
     fn make_test_target(dir: &std::path::Path, kind: ClientTargetKind, file: &str) -> ClientTarget {
-        ClientTarget::new(kind, dir.join(file))
+        crate::discovery::file_target(kind, dir.join(file))
     }
 
     #[test]
@@ -1234,7 +1234,7 @@ mod tests {
         let target = make_test_target(temp.path(), ClientTargetKind::Cursor, "mcp.json");
         let bytes = vec![b'{', 0xC3, 0x28, b'}']; // 不正な UTF-8
         std::fs::write(&target.path, &bytes).unwrap();
-        let target = ClientTarget::new(ClientTargetKind::Cursor, target.path);
+        let target = crate::discovery::file_target(ClientTargetKind::Cursor, target.path);
         let path = target.path.clone();
 
         let mut app = Clp2cfgApp::new_with_targets(vec![target]);
@@ -1752,7 +1752,7 @@ mod tests {
         cli.path = std::path::PathBuf::from("codex");
 
         let mut app = Clp2cfgApp::new_with_targets(vec![
-            ClientTarget::new(ClientTargetKind::Cursor, path),
+            crate::discovery::file_target(ClientTargetKind::Cursor, path),
             cli,
         ]);
         app.auto_read_clipboard = false;
@@ -1812,7 +1812,7 @@ mod tests {
         if let Some(content) = existing {
             std::fs::write(&path, content).unwrap();
         }
-        let mut target = ClientTarget::new(ClientTargetKind::Cursor, path.clone());
+        let mut target = crate::discovery::file_target(ClientTargetKind::Cursor, path.clone());
         target.selected = true;
         let mut app = Clp2cfgApp::new_with_targets(vec![target]);
         app.auto_read_clipboard = false;

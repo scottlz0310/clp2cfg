@@ -158,11 +158,6 @@ struct Allowed {
 /// 現状の違反。解消した PR が、その行を削除する。
 const ALLOWLIST: &[Allowed] = &[
     Allowed {
-        key: "domain::client -> .is_file()",
-        reason: "ClientTarget::new / new_cli が存在判定のためにファイルシステムを見る",
-        issue: "#62",
-    },
-    Allowed {
         key: "preview -> std::fs",
         reason: "プレビューの生成が既存ファイルを直接読む（port 経由にする）",
         issue: "#64",
