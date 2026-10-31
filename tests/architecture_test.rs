@@ -114,6 +114,8 @@ const FILE_LAYERS: &[(&str, Layer)] = &[
     ("headless::request", Layer::CliFrontend),
     ("headless::select", Layer::CliFrontend),
     ("app", Layer::GuiFrontend),
+    ("app::clipboard", Layer::GuiFrontend),
+    ("app::system", Layer::GuiFrontend),
     ("entry", Layer::Entry),
 ];
 

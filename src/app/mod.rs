@@ -1,3 +1,6 @@
+mod clipboard;
+mod system;
+
 use crate::apply::{
     apply_targets, count_changes, plan_target, undo_file, Applied, LastApply, Mode, ServerChanges,
     SystemIo, UndoAction,
@@ -7,6 +10,9 @@ use crate::domain::{ClientTarget, McpServersMap, ServerChange, TargetAction};
 use crate::snippet::filter::FilterOptions;
 use crate::snippet::pipeline::{prepare, Prepared};
 use crate::snippet::placeholder::{is_placeholder, EnvOverrides, EnvRef};
+use clipboard::get_clipboard_text;
+pub use system::load_app_icon;
+use system::{setup_system_fonts, AUTO_READ_STORAGE_KEY};
 
 /// 各クライアント設定ターゲットの GUI 表示・状態
 #[derive(Debug, Clone)]
@@ -80,12 +86,6 @@ impl Default for StartupOptions {
         }
     }
 }
-
-/// 自動読み取りトグルの永続化キー
-const AUTO_READ_STORAGE_KEY: &str = "auto_read_clipboard";
-
-/// Windows 等で並行テスト実行時に OLE/COM クリップボードの同時初期化によるヒープ破損を防ぐためのロック
-static CLIPBOARD_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// clp2cfg のメインアプリケーション状態
 pub struct Clp2cfgApp {
@@ -189,12 +189,12 @@ impl Clp2cfgApp {
             self.status_message = Some(("起動引数の入力を読み込みました".to_string(), false));
         }
         // この時点のクリップボードは「判定済み」とし、後から別の内容がコピーされたときだけ自動読み取りの対象にする
-        self.last_clipboard_seen = Self::get_clipboard_text().map(|text| text.trim().to_string());
+        self.last_clipboard_seen = get_clipboard_text().map(|text| text.trim().to_string());
     }
 
     /// 手動操作（ボタン・Ctrl+V）用: OS クリップボードの文字列を内容を問わず入力欄に展開してパースする
     pub fn read_from_clipboard(&mut self) -> bool {
-        match Self::get_clipboard_text() {
+        match get_clipboard_text() {
             Some(text) => self.load_clipboard_text(&text, false),
             None => false,
         }
@@ -202,7 +202,7 @@ impl Clp2cfgApp {
 
     /// 自動読み取り用（起動時・フォーカス獲得時）
     pub fn auto_read_from_clipboard(&mut self) -> bool {
-        match Self::get_clipboard_text() {
+        match get_clipboard_text() {
             Some(text) => self.load_clipboard_text(&text, true),
             None => false,
         }
@@ -234,13 +234,6 @@ impl Clp2cfgApp {
         self.reparse();
         self.status_message = Some(("クリップボードから読み取りました".to_string(), false));
         true
-    }
-
-    /// OS クリップボードの文字列を取得
-    fn get_clipboard_text() -> Option<String> {
-        let _guard = CLIPBOARD_LOCK.lock().ok()?;
-        let mut clipboard = arboard::Clipboard::new().ok()?;
-        clipboard.get_text().ok()
     }
 
     /// 入力文字列をパースし、差分プレビューを更新する
@@ -989,60 +982,6 @@ impl eframe::App for Clp2cfgApp {
     /// スクロール位置等の egui 内部状態は復元不要。保存対象は自動読み取りトグルのみとする
     fn persist_egui_memory(&self) -> bool {
         false
-    }
-}
-
-/// OS 標準の日本語/CJKフォントを探索して egui のフォント定義に登録
-fn setup_system_fonts(ctx: &egui::Context) {
-    let mut fonts = egui::FontDefinitions::default();
-
-    let font_candidates = [
-        "C:\\Windows\\Fonts\\meiryo.ttc",
-        "C:\\Windows\\Fonts\\YuGothM.ttc",
-        "C:\\Windows\\Fonts\\msgothic.ttc",
-        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
-        "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
-        "/System/Library/Fonts/PingFang.ttc",
-        "/System/Library/Fonts/Hiragino Sans GB.ttc",
-    ];
-
-    for path in font_candidates {
-        if let Ok(font_data) = std::fs::read(path) {
-            fonts.font_data.insert(
-                "cjk_fallback".to_owned(),
-                std::sync::Arc::new(egui::FontData::from_owned(font_data)),
-            );
-            if let Some(prop) = fonts.families.get_mut(&egui::FontFamily::Proportional) {
-                prop.push("cjk_fallback".to_owned());
-            }
-            if let Some(mono) = fonts.families.get_mut(&egui::FontFamily::Monospace) {
-                mono.push("cjk_fallback".to_owned());
-            }
-            break;
-        }
-    }
-
-    ctx.set_fonts(fonts);
-}
-
-/// アプリケーションアイコン（`assets/icon.png`）を読み込み、`egui::IconData` を生成する。
-/// 読み込みに失敗した場合は警告ログを出力して `None` を返す。
-pub fn load_app_icon() -> Option<egui::IconData> {
-    const ICON_BYTES: &[u8] = include_bytes!("../assets/icon.png");
-    match image::load_from_memory(ICON_BYTES) {
-        Ok(image) => {
-            let rgba = image.to_rgba8();
-            let (width, height) = rgba.dimensions();
-            Some(egui::IconData {
-                rgba: rgba.into_raw(),
-                width,
-                height,
-            })
-        }
-        Err(err) => {
-            tracing::warn!("Failed to decode application icon: {err}");
-            None
-        }
     }
 }
 
