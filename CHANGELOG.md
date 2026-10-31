@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - クライアントごとの違い（設定キー・JSONC の許容・`type: stdio` の補完・公式 CLI の呼び出し方）を `ClientSpec`（`domain/client.rs` のデータ表）に集約し、クライアント追加時の変更箇所を減らした（内部変更。挙動は不変）（#61）
 - `merger.rs` / `cli.rs` を、純粋なもの（`merge`、`delegate::plan`）と副作用のあるもの（`discovery`、`delegate::exec`）に分割。クライアント検出は `HostDirs` と `config_path` に整理して種類ごとのパスを検証可能にし、`ClientTarget::new` はファイルシステムを見ない形に変更（内部変更。検出結果のパスと順序は不変）（#62）
 - スニペット → サーバー定義の変換（パース・コマンドフィルタ・プレースホルダーの検出と実値の埋め込み）を `snippet::pipeline::prepare` に一本化し、GUI と headless の重複を解消（`parser` / `filter` / `placeholder` は `snippet/` へ移動。内部変更。挙動は不変）（#63）
+- クライアントへの適用（計画・書き込み・CLI の実行・結果の集計・取り消し）を `apply` モジュールに一本化し、GUI と headless の重複を解消。ファイルとサブプロセスの操作を `TargetIo`（port）経由にして、インメモリ fake でテストできるようにした（`preview.rs` / `undo.rs` は `apply/` に統合）。パスがディレクトリのときのエラーメッセージが「設定ファイルを読み取れません」になる以外、挙動は不変（内部変更）（#64）
 
 ### Fixed
 

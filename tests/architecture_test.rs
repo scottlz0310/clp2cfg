@@ -100,8 +100,6 @@ const FILE_LAYERS: &[(&str, Layer)] = &[
     ("discovery", Layer::Platform),
     ("delegate::exec", Layer::Platform),
     ("writer", Layer::Platform),
-    ("undo", Layer::Platform),
-    ("preview", Layer::Apply),
     ("apply", Layer::Apply),
     ("apply::error", Layer::Apply),
     ("apply::fake", Layer::Apply),
@@ -167,39 +165,9 @@ struct Allowed {
 /// 現状の違反。解消した PR が、その行を削除する。
 const ALLOWLIST: &[Allowed] = &[
     Allowed {
-        key: "preview -> std::fs",
-        reason: "プレビューの生成が既存ファイルを直接読む（port 経由にする）",
-        issue: "#64",
-    },
-    Allowed {
-        key: "app -> crate::writer",
-        reason: "GUI が原子書き込みを直接呼ぶ（ユースケースを通す）",
-        issue: "#64",
-    },
-    Allowed {
-        key: "app -> crate::delegate::exec",
-        reason: "GUI が CLI コマンドの実行を直接呼ぶ（ユースケースを通す）",
-        issue: "#64",
-    },
-    Allowed {
-        key: "app -> crate::undo",
-        reason: "GUI が取り消しの復元を直接呼ぶ（適用結果の型と復元処理の置き場を決める）",
-        issue: "#64",
-    },
-    Allowed {
         key: "app -> crate::discovery",
         reason: "GUI がクライアント検出を直接呼ぶ（検出は entry が行い、frontend へ渡す）",
         issue: "#66",
-    },
-    Allowed {
-        key: "headless -> crate::writer",
-        reason: "ヘッドレス実行が原子書き込みを直接呼ぶ（ユースケースを通す）",
-        issue: "#64",
-    },
-    Allowed {
-        key: "headless -> crate::delegate::exec",
-        reason: "ヘッドレス実行が CLI コマンドの実行を直接呼ぶ（ユースケースを通す）",
-        issue: "#64",
     },
     Allowed {
         key: "headless -> crate::discovery",
