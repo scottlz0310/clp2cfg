@@ -1,8 +1,8 @@
 //! Preview of what applying a snippet to a target would do (file merge result or CLI commands).
 
-use crate::cli::{build_cli_invocations, preview_invocations};
+use crate::delegate::plan::{build_cli_invocations, preview_invocations};
 use crate::domain::{ClientTarget, McpServersMap, ServerChange, TargetAction};
-use crate::merger::{classify_server_changes, merge_mcp_servers};
+use crate::merge::{classify_server_changes, merge_mcp_servers};
 use std::collections::BTreeMap;
 
 /// サーバー名ごとの判定

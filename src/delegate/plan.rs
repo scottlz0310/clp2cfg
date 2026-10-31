@@ -1,22 +1,8 @@
-//! CLI delegation adapter: builds and runs official `<cli> mcp add` commands.
+//! Builds the official-CLI commands that register servers, and renders them for display.
+//! Pure: nothing here runs a process (see `exec`).
 
+use crate::delegate::CliError;
 use crate::domain::{CliSpec, ClientTargetKind, McpServersMap, NormalizedServerConfig};
-use std::path::{Path, PathBuf};
-use std::process::Command;
-use thiserror::Error;
-
-/// Error types occurring while building or running official CLI commands.
-#[derive(Debug, Error, PartialEq, Eq)]
-pub enum CliError {
-    #[error("Target kind does not use CLI delegation")]
-    NotCliTarget,
-
-    #[error("Failed to launch '{program}': {message}")]
-    LaunchFailed { program: String, message: String },
-
-    #[error("'{command}' exited with failure: {message}")]
-    CommandFailed { command: String, message: String },
-}
 
 /// A single subprocess invocation of a client's official CLI.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -28,7 +14,7 @@ pub struct CliInvocation {
 }
 
 impl CliInvocation {
-    fn new(program: &str, args: Vec<String>, ignore_failure: bool) -> Self {
+    pub(super) fn new(program: &str, args: Vec<String>, ignore_failure: bool) -> Self {
         Self {
             program: program.to_string(),
             args,
@@ -140,93 +126,6 @@ pub fn preview_invocations(invocations: &[CliInvocation]) -> String {
         .join("\n")
 }
 
-/// Run invocations in order using `runner`; stops at the first non-ignorable failure.
-pub fn run_invocations_with<F>(invocations: &[CliInvocation], mut runner: F) -> Result<(), CliError>
-where
-    F: FnMut(&CliInvocation) -> Result<(), CliError>,
-{
-    for inv in invocations {
-        match runner(inv) {
-            Ok(()) => {}
-            Err(_) if inv.ignore_failure => {}
-            Err(e) => return Err(e),
-        }
-    }
-    Ok(())
-}
-
-/// Run invocations as real subprocesses.
-pub fn run_invocations(invocations: &[CliInvocation]) -> Result<(), CliError> {
-    run_invocations_with(invocations, run_subprocess)
-}
-
-fn run_subprocess(inv: &CliInvocation) -> Result<(), CliError> {
-    let output = Command::new(&inv.program)
-        .args(&inv.args)
-        .output()
-        .map_err(|e| CliError::LaunchFailed {
-            program: inv.program.clone(),
-            message: e.to_string(),
-        })?;
-    if output.status.success() {
-        return Ok(());
-    }
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let message = if stderr.trim().is_empty() {
-        output.status.to_string()
-    } else {
-        stderr.trim().to_string()
-    };
-    Err(CliError::CommandFailed {
-        command: inv.display_redacted(),
-        message,
-    })
-}
-
-/// Locate an executable on `PATH`.
-pub fn find_in_path(program: &str) -> Option<PathBuf> {
-    let paths = std::env::var_os("PATH")?;
-    find_in_dirs(program, std::env::split_paths(&paths))
-}
-
-fn find_in_dirs(program: &str, dirs: impl Iterator<Item = PathBuf>) -> Option<PathBuf> {
-    let exts: &[&str] = if cfg!(windows) {
-        &["exe", "cmd", "bat"]
-    } else {
-        &[""]
-    };
-    for dir in dirs {
-        for ext in exts {
-            let candidate = if ext.is_empty() {
-                dir.join(program)
-            } else {
-                dir.join(format!("{program}.{ext}"))
-            };
-            if is_executable_file(&candidate) {
-                return Some(candidate);
-            }
-        }
-    }
-    None
-}
-
-fn is_executable_file(path: &Path) -> bool {
-    if !path.is_file() {
-        return false;
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        path.metadata()
-            .map(|m| m.permissions().mode() & 0o111 != 0)
-            .unwrap_or(false)
-    }
-    #[cfg(not(unix))]
-    {
-        true
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -296,66 +195,6 @@ mod tests {
     }
 
     #[test]
-    fn test_run_ignores_remove_failure_but_stops_on_add_failure() {
-        let inv = build_cli_invocations(ClientTargetKind::ClaudeCli, "claude", &servers()).unwrap();
-        let fail = |i: &CliInvocation| -> Result<(), CliError> {
-            Err(CliError::CommandFailed {
-                command: i.display(),
-                message: "boom".into(),
-            })
-        };
-        // remove failure tolerated, add failure reported
-        let err = run_invocations_with(&inv, fail).unwrap_err();
-        assert!(
-            matches!(err, CliError::CommandFailed { ref command, .. } if command.contains("mcp add"))
-        );
-
-        let mut seen = Vec::new();
-        run_invocations_with(&inv, |i| {
-            seen.push(i.display());
-            Ok(())
-        })
-        .unwrap();
-        assert_eq!(seen.len(), 2);
-    }
-
-    #[test]
-    fn test_run_subprocess_launch_failure() {
-        let inv = CliInvocation::new("clp2cfg-nonexistent-binary", vec![], false);
-        assert!(matches!(
-            run_invocations(&[inv]),
-            Err(CliError::LaunchFailed { .. })
-        ));
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn test_run_subprocess_real_exit_status() {
-        let ok = CliInvocation::new("true", vec![], false);
-        assert!(run_invocations(&[ok]).is_ok());
-        let bad = CliInvocation::new("false", vec![], false);
-        assert!(matches!(
-            run_invocations(&[bad]),
-            Err(CliError::CommandFailed { .. })
-        ));
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn test_find_in_dirs_requires_executable_bit() {
-        use std::os::unix::fs::PermissionsExt;
-        let dir = tempfile::tempdir().unwrap();
-        let exe = dir.path().join("mytool");
-        std::fs::write(&exe, "#!/bin/sh\n").unwrap();
-        assert!(find_in_dirs("mytool", [dir.path().to_path_buf()].into_iter()).is_none());
-        std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o755)).unwrap();
-        assert_eq!(
-            find_in_dirs("mytool", [dir.path().to_path_buf()].into_iter()),
-            Some(exe)
-        );
-    }
-
-    #[test]
     fn test_display_redacted_masks_only_env_values() {
         let cases = [
             // (args, display, display_redacted)
@@ -381,21 +220,5 @@ mod tests {
             assert_eq!(inv.display(), plain);
             assert_eq!(inv.display_redacted(), redacted);
         }
-    }
-
-    #[test]
-    fn test_command_failed_error_does_not_leak_env_values() {
-        let inv = CliInvocation::new(
-            "definitely-not-a-real-program",
-            vec![
-                "mcp".into(),
-                "add".into(),
-                "-e".into(),
-                "K=topsecret".into(),
-            ],
-            false,
-        );
-        let err = run_subprocess(&inv).unwrap_err().to_string();
-        assert!(!err.contains("topsecret"), "{err}");
     }
 }

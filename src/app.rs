@@ -1,7 +1,8 @@
-use crate::cli::{build_cli_invocations, run_invocations};
+use crate::delegate::exec::run_invocations;
+use crate::delegate::plan::build_cli_invocations;
+use crate::discovery::detect_client_targets;
 use crate::domain::{ClientTarget, McpServersMap, ServerChange, TargetAction};
 use crate::filter::{apply_filters, FilterOptions};
-use crate::merger::detect_client_targets;
 use crate::parser::parse_mcp_snippet;
 use crate::placeholder::{
     fill_placeholders, find_placeholders, is_placeholder, EnvOverrides, EnvRef,

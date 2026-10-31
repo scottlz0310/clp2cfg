@@ -1,10 +1,12 @@
 //! Headless (no window) apply / dry-run, shared by `clp2cfg --apply` and `clp2cfg-cli`.
 
 use crate::args::{Args, HeadlessAction, Mode};
-use crate::cli::{build_cli_invocations, run_invocations, CliError, CliInvocation};
+use crate::delegate::exec::run_invocations;
+use crate::delegate::plan::{build_cli_invocations, CliInvocation};
+use crate::delegate::CliError;
+use crate::discovery::detect_client_targets;
 use crate::domain::{ClientTarget, ClientTargetKind, McpServersMap, ServerChange, TargetAction};
 use crate::filter::{apply_filters, FilterOptions};
-use crate::merger::detect_client_targets;
 use crate::parser::parse_mcp_snippet;
 use crate::placeholder::find_placeholders;
 use crate::preview::{build_preview_with_changes, ServerChanges};
