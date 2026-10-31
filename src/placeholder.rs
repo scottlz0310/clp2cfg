@@ -1,6 +1,6 @@
 //! Detection and filling of unfilled placeholder values (e.g. `YOUR_API_KEY`) in server `env`.
 
-use crate::model::McpServersMap;
+use crate::domain::McpServersMap;
 use std::collections::BTreeMap;
 
 /// An `env` entry of a server, addressed by server name and variable name.
@@ -108,7 +108,7 @@ pub fn fill_placeholders(servers: &mut McpServersMap, refs: &[EnvRef], overrides
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::NormalizedServerConfig;
+    use crate::domain::NormalizedServerConfig;
 
     #[test]
     fn test_is_placeholder() {

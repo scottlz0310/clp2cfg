@@ -1,7 +1,6 @@
 //! Undo of the most recent apply: restore files from their `.bak`, or remove files the apply created.
 
-use crate::model::WriteError;
-use crate::writer::restore_from_backup;
+use crate::writer::{restore_from_backup, WriteError};
 use std::fs;
 use std::path::PathBuf;
 use thiserror::Error;

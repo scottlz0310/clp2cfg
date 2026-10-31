@@ -1,8 +1,8 @@
 //! Preview of what applying a snippet to a target would do (file merge result or CLI commands).
 
 use crate::cli::{build_cli_invocations, preview_invocations};
-use crate::merger::{classify_server_changes, merge_mcp_servers, ServerChange};
-use crate::model::{ClientTarget, McpServersMap, TargetAction};
+use crate::domain::{ClientTarget, McpServersMap, ServerChange, TargetAction};
+use crate::merger::{classify_server_changes, merge_mcp_servers};
 use std::collections::BTreeMap;
 
 /// サーバー名ごとの判定
@@ -51,7 +51,7 @@ pub fn build_preview(target: &ClientTarget, servers: &McpServersMap) -> Result<S
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{ClientTargetKind, NormalizedServerConfig};
+    use crate::domain::{ClientTargetKind, NormalizedServerConfig};
     use tempfile::tempdir;
 
     fn servers() -> McpServersMap {

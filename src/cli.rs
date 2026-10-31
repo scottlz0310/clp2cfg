@@ -1,10 +1,22 @@
 //! CLI delegation adapter: builds and runs official `<cli> mcp add` commands.
 
-use crate::model::{
-    CliError, ClientTargetKind, McpServersMap, NormalizedServerConfig, TargetAction,
-};
+use crate::domain::{ClientTargetKind, McpServersMap, NormalizedServerConfig, TargetAction};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use thiserror::Error;
+
+/// Error types occurring while building or running official CLI commands.
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum CliError {
+    #[error("Target kind does not use CLI delegation")]
+    NotCliTarget,
+
+    #[error("Failed to launch '{program}': {message}")]
+    LaunchFailed { program: String, message: String },
+
+    #[error("'{command}' exited with failure: {message}")]
+    CommandFailed { command: String, message: String },
+}
 
 /// A single subprocess invocation of a client's official CLI.
 #[derive(Debug, Clone, PartialEq, Eq)]

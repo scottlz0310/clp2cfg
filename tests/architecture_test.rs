@@ -85,7 +85,10 @@ enum Layer {
 /// 現在はフラットな配置のため、1 ファイルに複数の責務が混在するものは、主たる層に置いて
 /// 混在の分を `ALLOWLIST` に載せている。ファイルの分割・移動に合わせてこの表を更新する。
 const FILE_LAYERS: &[(&str, Layer)] = &[
-    ("model", Layer::Domain),
+    ("domain", Layer::Domain),
+    ("domain::change", Layer::Domain),
+    ("domain::client", Layer::Domain),
+    ("domain::server", Layer::Domain),
     ("parser", Layer::Pure),
     ("filter", Layer::Pure),
     ("placeholder", Layer::Pure),
@@ -152,14 +155,9 @@ struct Allowed {
 /// 現状の違反。解消した PR が、その行を削除する。
 const ALLOWLIST: &[Allowed] = &[
     Allowed {
-        key: "model -> .is_file()",
-        reason: "ClientTarget::new が存在判定のためにファイルシステムを見る",
+        key: "domain::client -> .is_file()",
+        reason: "ClientTarget::new / new_cli が存在判定のためにファイルシステムを見る",
         issue: "#62",
-    },
-    Allowed {
-        key: "model -> tempfile",
-        reason: "WriteError が tempfile::PersistError を持つ（エラー型が model.rs に集まっている）",
-        issue: "#60",
     },
     Allowed {
         key: "merger -> crate::cli",

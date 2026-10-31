@@ -1,9 +1,31 @@
 //! Safe atomic writer with automatic backup.
 
-use crate::model::WriteError;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use thiserror::Error;
+
+/// Error types occurring during safe atomic writing.
+#[derive(Debug, Error)]
+pub enum WriteError {
+    #[error("I/O error during writing: {0}")]
+    Io(#[from] std::io::Error),
+
+    #[error("Failed to create backup at {path}: {source}")]
+    BackupFailed {
+        path: PathBuf,
+        source: std::io::Error,
+    },
+
+    #[error("Failed to persist temporary file to {path}: {source}")]
+    PersistFailed {
+        path: PathBuf,
+        source: tempfile::PersistError,
+    },
+
+    #[error("Backup file not found: {0}")]
+    BackupMissing(PathBuf),
+}
 
 /// The path of the backup made before overwriting `target_path` (e.g. `mcp.json` -> `mcp.json.bak`).
 pub fn backup_path_for(target_path: &Path) -> PathBuf {

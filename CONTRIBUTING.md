@@ -58,7 +58,7 @@ CI でも `bun run check`、Rust の format と Clippy、`cargo llvm-cov` によ
 
 クライアントごとの設定形式や保存先を確認し、必要な変更を関連するモジュールに分けてください。
 
-1. `src/model.rs` の `ClientTargetKind` に種類を追加し、`display_name` に表示名を定義します。
+1. `src/domain/client.rs` の `ClientTargetKind` に種類を追加し、`display_name` に表示名を定義します。
 2. `src/merger.rs` の `detect_client_targets` に、OS ごとの保存先と検出方法を追加します。ユーザーのホームや設定ディレクトリは既存の `dirs` 利用方法に合わせてください。
 3. 同じファイルの `merge_mcp_servers` に、そのクライアントが要求する設定キーや形式を追加します。既存の設定を残し、同名サーバーは既存の upsert 動作に合わせて更新します。
 4. 関連するテストに、設定形式、既存設定の保持、同名サーバーの更新を確認するケースを追加します。保存先の検出を変更した場合は、対応するパスの動作も確認してください。
