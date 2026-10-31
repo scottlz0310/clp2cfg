@@ -27,6 +27,20 @@ pub enum WriteError {
     BackupMissing(PathBuf),
 }
 
+/// Read a config file; `Ok(None)` when it does not exist (any other failure is an error).
+pub fn read_if_exists(path: &Path) -> std::io::Result<Option<String>> {
+    match fs::read_to_string(path) {
+        Ok(content) => Ok(Some(content)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(e),
+    }
+}
+
+/// Remove a config file (used to undo a file the apply created).
+pub fn remove_file(path: &Path) -> std::io::Result<()> {
+    fs::remove_file(path)
+}
+
 /// The path of the backup made before overwriting `target_path` (e.g. `mcp.json` -> `mcp.json.bak`).
 pub fn backup_path_for(target_path: &Path) -> PathBuf {
     target_path.with_extension(format!(
@@ -140,6 +154,36 @@ fn replace_atomically(
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[test]
+    fn test_read_if_exists_distinguishes_missing_from_unreadable() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("a.json");
+
+        assert_eq!(read_if_exists(&path).unwrap(), None);
+
+        fs::write(&path, "{}").unwrap();
+        assert_eq!(read_if_exists(&path).unwrap(), Some("{}".to_string()));
+
+        // UTF-8 でない内容は「無い」ではなく読み取り失敗
+        fs::write(&path, [0xFF, 0xFE, 0x00]).unwrap();
+        assert!(read_if_exists(&path).is_err());
+
+        // ディレクトリも「無い」ではなく読み取り失敗
+        assert!(read_if_exists(dir.path()).is_err());
+    }
+
+    #[test]
+    fn test_remove_file() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("a.json");
+        fs::write(&path, "{}").unwrap();
+
+        remove_file(&path).unwrap();
+
+        assert!(!path.exists());
+        assert!(remove_file(&path).is_err());
+    }
 
     #[test]
     fn test_safe_atomic_write_new_file() {

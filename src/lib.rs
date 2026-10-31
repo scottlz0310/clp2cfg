@@ -1,4 +1,5 @@
 pub mod app;
+pub mod apply;
 pub mod args;
 pub mod delegate;
 pub mod discovery;
