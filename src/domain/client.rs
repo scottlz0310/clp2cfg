@@ -282,7 +282,6 @@ pub struct ClientTarget {
     /// Config file path, or the CLI executable (resolved path or bare name).
     pub path: PathBuf,
     pub exists: bool,
-    pub selected: bool,
 }
 
 impl ClientTarget {
@@ -292,7 +291,6 @@ impl ClientTarget {
             name: kind.display_name().to_string(),
             kind,
             exists,
-            selected: exists, // Default to true if the file already exists
             path,
         }
     }
@@ -306,7 +304,6 @@ impl ClientTarget {
             kind,
             path,
             exists,
-            selected: exists,
         }
     }
 }
@@ -432,8 +429,8 @@ mod tests {
         let present = ClientTarget::new(ClientTargetKind::Cursor, path.clone(), true);
         let missing = ClientTarget::new(ClientTargetKind::Cursor, path.clone(), false);
 
-        assert!(present.exists && present.selected);
-        assert!(!missing.exists && !missing.selected);
+        assert!(present.exists);
+        assert!(!missing.exists);
         assert_eq!(present.name, "Cursor");
         assert_eq!(present.path, path);
     }

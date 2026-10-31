@@ -46,7 +46,7 @@ fn detect_with(
         .collect()
 }
 
-/// A file target; it exists (and is selected by default) when the config file is already there.
+/// A file target; it exists when the config file is already there.
 pub(crate) fn file_target(kind: ClientTargetKind, path: PathBuf) -> ClientTarget {
     let exists = path.is_file();
     ClientTarget::new(kind, path, exists)
@@ -285,10 +285,10 @@ mod tests {
         let by_kind = |kind| targets.iter().find(|t| t.kind == kind).unwrap();
         let claude = by_kind(ClientTargetKind::ClaudeCli);
         assert_eq!(claude.path, PathBuf::from("/bin/claude"));
-        assert!(claude.exists && claude.selected);
+        assert!(claude.exists);
         let codex = by_kind(ClientTargetKind::CodexCli);
         assert_eq!(codex.path, PathBuf::from("codex"), "未検出は裸の名前");
-        assert!(!codex.exists && !codex.selected);
+        assert!(!codex.exists);
     }
 
     #[test]
@@ -307,7 +307,7 @@ mod tests {
     }
 
     #[test]
-    fn test_file_target_exists_and_is_selected_only_when_the_file_is_there() {
+    fn test_file_target_exists_only_when_the_file_is_there() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("mcp.json");
 
@@ -315,8 +315,8 @@ mod tests {
         std::fs::write(&path, "{}").unwrap();
         let present = file_target(ClientTargetKind::Cursor, path);
 
-        assert!(!missing.exists && !missing.selected);
-        assert!(present.exists && present.selected);
+        assert!(!missing.exists);
+        assert!(present.exists);
     }
 
     #[test]
@@ -415,7 +415,6 @@ mod tests {
         // CLI 種は PATH 上の実行ファイル（見つからなければ裸の名前）。名前と存在判定の整合だけを見る
         for target in targets.iter().filter(|t| t.kind.cli_program().is_some()) {
             let program = target.kind.cli_program().unwrap();
-            assert_eq!(target.exists, target.selected, "{:?}", target.kind);
             assert_eq!(target.exists, find_in_path(program).is_some());
             if !target.exists {
                 assert_eq!(target.path, std::path::PathBuf::from(program));
@@ -430,7 +429,7 @@ mod tests {
             .find(|t| t.kind == ClientTargetKind::Project)
             .unwrap();
         assert_eq!(project_target.path, plain_mcp);
-        assert!(project_target.exists && project_target.selected);
+        assert!(project_target.exists);
     }
 
     #[test]

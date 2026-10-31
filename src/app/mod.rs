@@ -18,6 +18,8 @@ use system::{setup_system_fonts, AUTO_READ_STORAGE_KEY};
 #[derive(Debug, Clone)]
 pub struct TargetEntry {
     pub target: ClientTarget,
+    /// 「適用」の対象にするか。既存の設定ファイルがあるターゲットは、最初から選択済みにする
+    pub selected: bool,
     pub diff_preview: Option<String>,
     /// サーバーごとの「新規追加 / 上書き / 変更なし」（ファイル系ターゲットのみ）
     pub changes: Option<ServerChanges>,
@@ -27,6 +29,7 @@ pub struct TargetEntry {
 impl TargetEntry {
     pub fn new(target: ClientTarget) -> Self {
         Self {
+            selected: target.exists,
             target,
             diff_preview: None,
             changes: None,
@@ -302,11 +305,7 @@ impl Clp2cfgApp {
     /// 「適用」で更新される対象の要約と、そのうち CLI を実行する件数。
     /// 一覧の画面外にあるチェック済みターゲットにも気付けるよう、ボトムバーに常時表示する。
     pub fn selection_summary(&self) -> (String, usize) {
-        let selected: Vec<_> = self
-            .target_entries
-            .iter()
-            .filter(|e| e.target.selected)
-            .collect();
+        let selected: Vec<_> = self.target_entries.iter().filter(|e| e.selected).collect();
         if selected.is_empty() {
             return ("適用対象: なし".to_string(), 0);
         }
@@ -489,11 +488,7 @@ impl Clp2cfgApp {
             }
         };
 
-        let selected_count = self
-            .target_entries
-            .iter()
-            .filter(|e| e.target.selected)
-            .count();
+        let selected_count = self.target_entries.iter().filter(|e| e.selected).count();
         if selected_count == 0 {
             self.status_message =
                 Some(("適用対象のターゲットが選択されていません".to_string(), true));
@@ -504,7 +499,7 @@ impl Clp2cfgApp {
             .target_entries
             .iter()
             .enumerate()
-            .filter(|(_, e)| e.target.selected)
+            .filter(|(_, e)| e.selected)
             .map(|(idx, _)| idx)
             .collect();
         let mode = if dry_run { Mode::DryRun } else { Mode::Apply };
@@ -597,7 +592,7 @@ impl Clp2cfgApp {
         // Ctrl+Enter: 選択ターゲットにマージを適用 (Apply)
         if ctrl_enter_pressed {
             let can_apply =
-                self.parsed_config.is_ok() && self.target_entries.iter().any(|e| e.target.selected);
+                self.parsed_config.is_ok() && self.target_entries.iter().any(|e| e.selected);
             if can_apply {
                 self.apply_all(false);
             }
@@ -719,7 +714,7 @@ impl Clp2cfgApp {
                 },
                 |ui| {
                     let can_apply = self.parsed_config.is_ok()
-                        && self.target_entries.iter().any(|e| e.target.selected);
+                        && self.target_entries.iter().any(|e| e.selected);
 
                     if ui
                         .add_enabled(can_apply, egui::Button::new("💾 適用 (Ctrl+Enter)"))
@@ -846,7 +841,7 @@ impl Clp2cfgApp {
                     for (idx, entry) in self.target_entries.iter_mut().enumerate() {
                         let is_active = idx == self.selected_target_idx;
                         ui.horizontal(|ui| {
-                            ui.checkbox(&mut entry.target.selected, "");
+                            ui.checkbox(&mut entry.selected, "");
 
                             let exists = entry.target.exists;
                             let is_cli = entry.target.kind.action() == TargetAction::CliCommand;
@@ -1049,7 +1044,7 @@ mod tests {
 
         let mut app = Clp2cfgApp::new_with_targets(vec![target]);
         // ターゲットを選択状態にする
-        app.target_entries[0].target.selected = true;
+        app.target_entries[0].selected = true;
 
         app.raw_input = r#"{
             "test-server": {
@@ -1102,7 +1097,7 @@ mod tests {
         let temp = tempdir().unwrap();
         let target = make_test_target(temp.path(), ClientTargetKind::Cursor, "mcp.json");
         let mut app = Clp2cfgApp::new_with_targets(vec![target]);
-        app.target_entries[0].target.selected = true;
+        app.target_entries[0].selected = true;
 
         app.apply_all(false);
         assert!(app.status_message.as_ref().unwrap().1); // is_error = true
@@ -1124,7 +1119,7 @@ mod tests {
         let target = make_test_target(&blocking_file, ClientTargetKind::Cursor, "mcp.json");
 
         let mut app = Clp2cfgApp::new_with_targets(vec![target]);
-        app.target_entries[0].target.selected = true;
+        app.target_entries[0].selected = true;
 
         app.raw_input = r#"{"test": {"command": "echo"}}"#.to_string();
         app.reparse();
@@ -1166,7 +1161,7 @@ mod tests {
         let temp = tempdir().unwrap();
         let target = make_test_target(temp.path(), ClientTargetKind::Cursor, "mcp.json");
         let mut app = Clp2cfgApp::new_with_targets(vec![target]);
-        app.target_entries[0].target.selected = false;
+        app.target_entries[0].selected = false;
 
         app.raw_input = r#"{"s": {"command": "cmd"}}"#.to_string();
         app.reparse();
@@ -1180,8 +1175,8 @@ mod tests {
         let mut target = ClientTarget::new_cli(ClientTargetKind::CodexCli, None);
         // 存在しないバイナリ: 実実行なら失敗し、Dry-Run なら実行されない
         target.path = std::path::PathBuf::from("clp2cfg-nonexistent-binary");
-        target.selected = true;
         let mut app = Clp2cfgApp::new_with_targets(vec![target]);
+        app.target_entries[0].selected = true;
         app.raw_input =
             r#"{"mcpServers":{"fetch":{"command":"uvx","args":["mcp-server-fetch"]}}}"#.to_string();
         app.reparse();
@@ -1281,7 +1276,7 @@ mod tests {
         app.auto_read_clipboard = false;
         app.raw_input = r#"{"test": {"command": "echo"}}"#.to_string();
         app.reparse();
-        app.target_entries[0].target.selected = true;
+        app.target_entries[0].selected = true;
 
         let ctx = egui::Context::default();
         let mut raw_input = egui::RawInput::default();
@@ -1497,7 +1492,7 @@ mod tests {
         app.raw_input =
             r#"{"gh":{"command":"x","env":{"A":"YOUR_KEY","B":"sk-secret-value"}}}"#.to_string();
         app.reparse();
-        app.target_entries[0].target.selected = true;
+        app.target_entries[0].selected = true;
 
         app.apply_all(false);
 
@@ -1519,14 +1514,13 @@ mod tests {
             ];
             let targets = kinds
                 .iter()
-                .zip(selected)
-                .map(|(kind, on)| {
-                    let mut t = make_test_target(temp.path(), *kind, "x");
-                    t.selected = *on;
-                    t
-                })
+                .map(|kind| make_test_target(temp.path(), *kind, "x"))
                 .collect();
-            Clp2cfgApp::new_with_targets(targets)
+            let mut app = Clp2cfgApp::new_with_targets(targets);
+            for (entry, on) in app.target_entries.iter_mut().zip(selected) {
+                entry.selected = *on;
+            }
+            app
         };
 
         struct Case {
@@ -1697,6 +1691,31 @@ mod tests {
     }
 
     #[test]
+    fn test_target_entry_is_selected_by_default_only_when_the_target_exists() {
+        let cases = [
+            (
+                ClientTarget::new(ClientTargetKind::Cursor, "a.json".into(), true),
+                true,
+            ),
+            (
+                ClientTarget::new(ClientTargetKind::Cursor, "a.json".into(), false),
+                false,
+            ),
+            (
+                ClientTarget::new_cli(ClientTargetKind::CodexCli, Some("codex".into())),
+                true,
+            ),
+            (
+                ClientTarget::new_cli(ClientTargetKind::CodexCli, None),
+                false,
+            ),
+        ];
+        for (target, expected) in cases {
+            let name = format!("{:?} exists={}", target.kind, target.exists);
+            assert_eq!(TargetEntry::new(target).selected, expected, "{name}");
+        }
+    }
+    #[test]
     fn test_change_badge_distinguishes_new_and_updated() {
         let (new_label, new_color) = change_badge(ServerChange::New);
         let (updated_label, updated_color) = change_badge(ServerChange::Updated);
@@ -1718,9 +1737,9 @@ mod tests {
         if let Some(content) = existing {
             std::fs::write(&path, content).unwrap();
         }
-        let mut target = crate::discovery::file_target(ClientTargetKind::Cursor, path.clone());
-        target.selected = true;
+        let target = crate::discovery::file_target(ClientTargetKind::Cursor, path.clone());
         let mut app = Clp2cfgApp::new_with_targets(vec![target]);
+        app.target_entries[0].selected = true;
         app.auto_read_clipboard = false;
         app.replace_npx_with_bunx = false;
         app.raw_input = r#"{"added":{"command":"node"}}"#.to_string();
@@ -1734,20 +1753,18 @@ mod tests {
         let temp = tempdir().unwrap();
         let existing = temp.path().join("existing.json");
         std::fs::write(&existing, r#"{"keep":1}"#).unwrap();
-        let mut ok_existing =
-            crate::discovery::file_target(ClientTargetKind::Cursor, existing.clone());
-        ok_existing.selected = true;
-        let mut ok_new =
+        let ok_existing = crate::discovery::file_target(ClientTargetKind::Cursor, existing.clone());
+        let ok_new =
             crate::discovery::file_target(ClientTargetKind::Windsurf, temp.path().join("new.json"));
-        ok_new.selected = true;
         // 親パスがファイルのため、書き込みが必ず失敗する
         let blocking = temp.path().join("blocking_file");
         std::fs::write(&blocking, "x").unwrap();
-        let mut bad =
-            crate::discovery::file_target(ClientTargetKind::Cline, blocking.join("mcp.json"));
-        bad.selected = true;
+        let bad = crate::discovery::file_target(ClientTargetKind::Cline, blocking.join("mcp.json"));
 
         let mut app = Clp2cfgApp::new_with_targets(vec![ok_existing, ok_new, bad]);
+        for entry in &mut app.target_entries {
+            entry.selected = true;
+        }
         app.auto_read_clipboard = false;
         app.raw_input = r#"{"test":{"command":"echo"}}"#.to_string();
         app.reparse();
@@ -1877,9 +1894,10 @@ mod tests {
 
         let mut cli = ClientTarget::new_cli(ClientTargetKind::CodexCli, None);
         cli.path = std::path::PathBuf::from("clp2cfg-nonexistent-binary");
-        cli.selected = true;
-        app.target_entries[0].target.selected = false;
-        app.target_entries.push(TargetEntry::new(cli));
+        app.target_entries[0].selected = false;
+        let mut cli_entry = TargetEntry::new(cli);
+        cli_entry.selected = true;
+        app.target_entries.push(cli_entry);
         app.apply_all(false);
         assert!(
             app.status_message.as_ref().unwrap().1,
