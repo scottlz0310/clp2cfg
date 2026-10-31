@@ -12,9 +12,9 @@ pre-commit:
       run: cargo fmt --check
     rust-clippy:
       glob: "*.rs"
-      run: cargo clippy --all-targets -- -D warnings
+      run: cargo clippy --workspace --all-targets -- -D warnings
 
 pre-push:
   commands:
     cargo-test:
-      run: cargo test
+      run: cargo test --workspace

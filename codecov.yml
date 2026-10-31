@@ -24,7 +24,8 @@ coverage:
         if_ci_failed: error
 
   ignore:
-    - "src/main.rs"
+    - "crates/clp2cfg/src/main.rs"
+    - "crates/clp2cfg-cli/src/main.rs"
 
 comment:
   layout: "reach,diff,flags,tree"

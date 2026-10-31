@@ -38,3 +38,5 @@ jobs:
     with:
       target_version: ${{ inputs.target_version }}
       bump_strategy: rust
+      # 版を持つのは clp2cfg-cli の Cargo.toml だけ（`--version` を出す Args がある crate）。release-automate は直接の [package].version を 1 つだけ書き換える
+      version_file: crates/clp2cfg-cli/Cargo.toml

@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - headless を clap の `Args` から分離（内部変更）。`headless.rs` を `headless/`（実行・入力の解決・対象の選択・出力）に分割し、`HeadlessRequest` を受ける形にして、入力（クリップボード・標準入力）とクライアント検出を別々の port で受ける。OS の実装は `entry.rs` に集約。`--help` / `--version` の出力、終了コード、出力は変わらない。
 - GUI の状態と更新ロジックを egui から分離（内部変更）。`app.rs` を `app/`（状態・操作・クリップボード・システム設定・描画）に分割し、状態は `AppState` / `UiAction` として egui・eframe・arboard に依存しない。クリップボードとファイル I/O は port で注入し、`ClientTarget.selected` は GUI 側の `TargetEntry` に移す。画面の見た目・文言・ショートカット・永続化キーは変わらない。
 - GUI の描画（`render_ui`）をパネルごとの view（`app/view/`: トップバー・ボトムバー・入力・ターゲット一覧・プレビュー・ショートカット）に分割（内部変更）。view は `AppState` を読むだけで、操作は `UiAction` として返し、フレームの終わりにまとめて反映する。画面の見た目・文言・ショートカットは変わらない。
+- リポジトリを 3 つの crate の workspace（`clp2cfg-core` / `clp2cfg-cli` / `clp2cfg`）に分割（内部変更）。依存の向きをコンパイラが強制し、`clp2cfg-cli`（コンソール版）が GUI の依存（egui / eframe / image）を持たなくなった。成果物の名前と中身、`--help` / `--version`、終了コードは変わらない。ソースからのインストールは `cargo install --git https://github.com/scottlz0310/clp2cfg clp2cfg clp2cfg-cli` のようにパッケージを指定する。`clp2cfg-cli.exe` には、Windows のアイコンとファイルバージョンの情報が付かなくなった（GUI の `clp2cfg.exe` は従来どおり）。
 
 ### Fixed
 
