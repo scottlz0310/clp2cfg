@@ -1,4 +1,4 @@
-//! Client target kinds and where their configuration lives.
+//! Client target kinds, what differs between clients (as data), and where their configuration lives.
 
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -13,6 +13,10 @@ pub enum TargetAction {
 }
 
 /// Target AI client kind for MCP server configuration.
+///
+/// Everything that differs between clients lives in [`ClientTargetKind::spec`]: adding a client
+/// means a variant here, an entry in `ALL`, and an arm in `spec` (plus its config location in the
+/// detection code). Forgetting the `spec` arm is a compile error.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum ClientTargetKind {
     // --- File merge targets ---
@@ -31,6 +35,165 @@ pub enum ClientTargetKind {
     AntigravityCli,
 }
 
+/// What differs between clients, as data.
+#[derive(Debug, PartialEq, Eq)]
+pub struct ClientSpec {
+    /// Stable identifier used on the command line (`--target <name>`).
+    pub cli_name: &'static str,
+    /// Friendly display name.
+    pub display_name: &'static str,
+    /// How the definitions reach the client.
+    pub apply: ApplySpec,
+}
+
+/// How a client receives the definitions.
+#[derive(Debug, PartialEq, Eq)]
+pub enum ApplySpec {
+    File(FileSpec),
+    Cli(CliSpec),
+}
+
+/// A client whose config file is merged directly.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FileSpec {
+    /// The JSON key that holds the MCP servers.
+    pub servers_key: &'static str,
+    /// The existing file is JSONC (comments are not preserved on rewrite; the `.bak` keeps them).
+    pub allows_jsonc: bool,
+    /// Each server gets `"type": "stdio"` when it has no `type`.
+    pub adds_stdio_type: bool,
+}
+
+/// A client reached through its official CLI (`<program> mcp add ...`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CliSpec {
+    /// Executable name looked up on `PATH`.
+    pub program: &'static str,
+    /// `mcp add` rejects an existing name, so a `remove` (failure ignored) runs first.
+    /// Verified on real CLIs: `claude` and `copilot` reject; `codex` and `agy` upsert.
+    pub remove_before_add: bool,
+    /// Value of `--scope`, when the CLI needs one.
+    pub scope: Option<&'static str>,
+    /// Flag that passes one `KEY=VALUE` environment variable.
+    pub env_flag: &'static str,
+    /// The env flags go before the server name (`agy` requires it). Otherwise they go after the
+    /// name: `claude`'s variadic `-e` would swallow a name that comes after it.
+    pub flags_before_name: bool,
+}
+
+const MCP_SERVERS_FILE: FileSpec = FileSpec {
+    servers_key: "mcpServers",
+    allows_jsonc: false,
+    adds_stdio_type: false,
+};
+
+const DEFAULT_CLI: CliSpec = CliSpec {
+    program: "",
+    remove_before_add: false,
+    scope: None,
+    env_flag: "--env",
+    flags_before_name: false,
+};
+
+static CLAUDE: ClientSpec = ClientSpec {
+    cli_name: "claude",
+    display_name: "Claude Code / Desktop",
+    apply: ApplySpec::File(FileSpec {
+        adds_stdio_type: true,
+        ..MCP_SERVERS_FILE
+    }),
+};
+
+static CURSOR: ClientSpec = ClientSpec {
+    cli_name: "cursor",
+    display_name: "Cursor",
+    apply: ApplySpec::File(MCP_SERVERS_FILE),
+};
+
+static VSCODE: ClientSpec = ClientSpec {
+    cli_name: "vscode",
+    display_name: "VS Code Copilot",
+    apply: ApplySpec::File(FileSpec {
+        servers_key: "github.copilot.chat.mcp",
+        ..MCP_SERVERS_FILE
+    }),
+};
+
+static PROJECT: ClientSpec = ClientSpec {
+    cli_name: "project",
+    display_name: "Project Local (.mcp.json)",
+    apply: ApplySpec::File(MCP_SERVERS_FILE),
+};
+
+static WINDSURF: ClientSpec = ClientSpec {
+    cli_name: "windsurf",
+    display_name: "Windsurf",
+    apply: ApplySpec::File(MCP_SERVERS_FILE),
+};
+
+static CLINE: ClientSpec = ClientSpec {
+    cli_name: "cline",
+    display_name: "Cline (VS Code)",
+    apply: ApplySpec::File(MCP_SERVERS_FILE),
+};
+
+static ROO_CODE: ClientSpec = ClientSpec {
+    cli_name: "roo-code",
+    display_name: "Roo Code (VS Code)",
+    apply: ApplySpec::File(MCP_SERVERS_FILE),
+};
+
+static ZED: ClientSpec = ClientSpec {
+    cli_name: "zed",
+    display_name: "Zed",
+    apply: ApplySpec::File(FileSpec {
+        servers_key: "context_servers",
+        allows_jsonc: true,
+        ..MCP_SERVERS_FILE
+    }),
+};
+
+static CLAUDE_CLI: ClientSpec = ClientSpec {
+    cli_name: "claude-cli",
+    display_name: "Claude Code CLI",
+    apply: ApplySpec::Cli(CliSpec {
+        program: "claude",
+        remove_before_add: true,
+        scope: Some("user"),
+        env_flag: "-e",
+        ..DEFAULT_CLI
+    }),
+};
+
+static CODEX_CLI: ClientSpec = ClientSpec {
+    cli_name: "codex-cli",
+    display_name: "Codex CLI",
+    apply: ApplySpec::Cli(CliSpec {
+        program: "codex",
+        ..DEFAULT_CLI
+    }),
+};
+
+static COPILOT_CLI: ClientSpec = ClientSpec {
+    cli_name: "copilot-cli",
+    display_name: "GitHub Copilot CLI",
+    apply: ApplySpec::Cli(CliSpec {
+        program: "copilot",
+        remove_before_add: true,
+        ..DEFAULT_CLI
+    }),
+};
+
+static ANTIGRAVITY_CLI: ClientSpec = ClientSpec {
+    cli_name: "antigravity-cli",
+    display_name: "Antigravity CLI",
+    apply: ApplySpec::Cli(CliSpec {
+        program: "agy",
+        flags_before_name: true,
+        ..DEFAULT_CLI
+    }),
+};
+
 impl ClientTargetKind {
     /// Every target kind, in display order.
     pub const ALL: [Self; 12] = [
@@ -48,22 +211,43 @@ impl ClientTargetKind {
         Self::AntigravityCli,
     ];
 
+    /// What differs for this client. The only exhaustive `match` over the kinds.
+    pub fn spec(&self) -> &'static ClientSpec {
+        match self {
+            Self::Claude => &CLAUDE,
+            Self::Cursor => &CURSOR,
+            Self::VsCode => &VSCODE,
+            Self::Project => &PROJECT,
+            Self::Windsurf => &WINDSURF,
+            Self::Cline => &CLINE,
+            Self::RooCode => &ROO_CODE,
+            Self::Zed => &ZED,
+            Self::ClaudeCli => &CLAUDE_CLI,
+            Self::CodexCli => &CODEX_CLI,
+            Self::CopilotCli => &COPILOT_CLI,
+            Self::AntigravityCli => &ANTIGRAVITY_CLI,
+        }
+    }
+
+    /// The file-merge settings, for file targets.
+    pub fn file_spec(&self) -> Option<&'static FileSpec> {
+        match &self.spec().apply {
+            ApplySpec::File(file) => Some(file),
+            ApplySpec::Cli(_) => None,
+        }
+    }
+
+    /// The CLI-delegation settings, for CLI targets.
+    pub fn cli_spec(&self) -> Option<&'static CliSpec> {
+        match &self.spec().apply {
+            ApplySpec::Cli(cli) => Some(cli),
+            ApplySpec::File(_) => None,
+        }
+    }
+
     /// Stable identifier used on the command line (`--target <name>`).
     pub fn cli_name(&self) -> &'static str {
-        match self {
-            Self::Claude => "claude",
-            Self::Cursor => "cursor",
-            Self::VsCode => "vscode",
-            Self::Project => "project",
-            Self::Windsurf => "windsurf",
-            Self::Cline => "cline",
-            Self::RooCode => "roo-code",
-            Self::Zed => "zed",
-            Self::ClaudeCli => "claude-cli",
-            Self::CodexCli => "codex-cli",
-            Self::CopilotCli => "copilot-cli",
-            Self::AntigravityCli => "antigravity-cli",
-        }
+        self.spec().cli_name
     }
 
     /// Inverse of [`cli_name`](Self::cli_name).
@@ -73,41 +257,20 @@ impl ClientTargetKind {
 
     /// Friendly display name of the client target.
     pub fn display_name(&self) -> &'static str {
-        match self {
-            Self::Claude => "Claude Code / Desktop",
-            Self::Cursor => "Cursor",
-            Self::VsCode => "VS Code Copilot",
-            Self::Project => "Project Local (.mcp.json)",
-            Self::Windsurf => "Windsurf",
-            Self::Cline => "Cline (VS Code)",
-            Self::RooCode => "Roo Code (VS Code)",
-            Self::Zed => "Zed",
-            Self::ClaudeCli => "Claude Code CLI",
-            Self::CodexCli => "Codex CLI",
-            Self::CopilotCli => "GitHub Copilot CLI",
-            Self::AntigravityCli => "Antigravity CLI",
-        }
+        self.spec().display_name
     }
 
     /// How this target is applied (file merge vs. official CLI delegation).
     pub fn action(&self) -> TargetAction {
-        match self {
-            Self::ClaudeCli | Self::CodexCli | Self::CopilotCli | Self::AntigravityCli => {
-                TargetAction::CliCommand
-            }
-            _ => TargetAction::FileMerge,
+        match self.spec().apply {
+            ApplySpec::File(_) => TargetAction::FileMerge,
+            ApplySpec::Cli(_) => TargetAction::CliCommand,
         }
     }
 
     /// Executable name of the official CLI for CLI-delegation targets.
     pub fn cli_program(&self) -> Option<&'static str> {
-        match self {
-            Self::ClaudeCli => Some("claude"),
-            Self::CodexCli => Some("codex"),
-            Self::CopilotCli => Some("copilot"),
-            Self::AntigravityCli => Some("agy"),
-            _ => None,
-        }
+        self.cli_spec().map(|cli| cli.program)
     }
 }
 
@@ -259,5 +422,28 @@ mod tests {
 
         assert_eq!(cli_names.len(), ClientTargetKind::ALL.len());
         assert_eq!(display_names.len(), ClientTargetKind::ALL.len());
+    }
+
+    #[test]
+    fn test_spec_matches_how_each_client_is_applied() {
+        for kind in ClientTargetKind::ALL {
+            match &kind.spec().apply {
+                ApplySpec::File(file) => {
+                    assert!(!file.servers_key.is_empty(), "{kind:?}");
+                    assert_eq!(kind.action(), TargetAction::FileMerge, "{kind:?}");
+                    assert_eq!(kind.file_spec(), Some(file), "{kind:?}");
+                    assert_eq!(kind.cli_spec(), None, "{kind:?}");
+                    assert_eq!(kind.cli_program(), None, "{kind:?}");
+                }
+                ApplySpec::Cli(cli) => {
+                    assert!(!cli.program.is_empty(), "{kind:?}");
+                    assert!(cli.env_flag.starts_with('-'), "{kind:?}");
+                    assert_eq!(kind.action(), TargetAction::CliCommand, "{kind:?}");
+                    assert_eq!(kind.cli_spec(), Some(cli), "{kind:?}");
+                    assert_eq!(kind.file_spec(), None, "{kind:?}");
+                    assert_eq!(kind.cli_program(), Some(cli.program), "{kind:?}");
+                }
+            }
+        }
     }
 }

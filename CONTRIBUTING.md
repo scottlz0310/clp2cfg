@@ -58,10 +58,12 @@ CI でも `bun run check`、Rust の format と Clippy、`cargo llvm-cov` によ
 
 クライアントごとの設定形式や保存先を確認し、必要な変更を関連するモジュールに分けてください。
 
-1. `src/domain/client.rs` の `ClientTargetKind` に種類を追加し、`display_name` に表示名を定義します。
+クライアントごとの違いは、`src/domain/client.rs` の `ClientSpec`（静的なデータ表）に集めています。ファイルを直接マージするクライアントは `FileSpec`（設定キー、既存の JSONC を許すか、`"type": "stdio"` を補うか）、公式 CLI へ委譲するクライアントは `CliSpec`（実行ファイル名、追加前の削除、`--scope`、環境変数のフラグ、フラグを名前の前に置くか）で表します。
+
+1. `src/domain/client.rs` の `ClientTargetKind` に種類を追加し、`ALL` にも加えます。同じファイルに `ClientSpec` の定義（`--target` の名前、表示名、`FileSpec` または `CliSpec`）を書き、`spec()` の `match` に加えます（加え忘れるとコンパイルエラーになります）。
 2. `src/merger.rs` の `detect_client_targets` に、OS ごとの保存先と検出方法を追加します。ユーザーのホームや設定ディレクトリは既存の `dirs` 利用方法に合わせてください。
-3. 同じファイルの `merge_mcp_servers` に、そのクライアントが要求する設定キーや形式を追加します。既存の設定を残し、同名サーバーは既存の upsert 動作に合わせて更新します。
-4. 関連するテストに、設定形式、既存設定の保持、同名サーバーの更新を確認するケースを追加します。保存先の検出を変更した場合は、対応するパスの動作も確認してください。
+3. 既存の設定を残し、同名サーバーは既存の upsert 動作に合わせて更新することを確認します。`merge_mcp_servers` と `cli.rs` は `ClientSpec` を読むため、通常はコードの変更は要りません。新しい形式の差が `FileSpec` / `CliSpec` で表せない場合に限り、項目を足してください。
+4. テストを更新します。`src/domain/client.rs` の `test_every_client_keeps_its_identity` に 1 行足し、`src/merger.rs` の `test_file_targets_keep_their_servers_key_and_quirks`（ファイル種）または `src/cli.rs` のコマンド列のテスト（CLI 種）に、そのクライアントのケースを加えます。保存先の検出を変更した場合は、対応するパスの動作も確認してください。
 5. 新しい入力形式が既存の形式で扱えない場合に限り、`src/parser.rs` を更新します。
 
 ## Pull request

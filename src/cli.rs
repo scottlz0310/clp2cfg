@@ -1,6 +1,6 @@
 //! CLI delegation adapter: builds and runs official `<cli> mcp add` commands.
 
-use crate::domain::{ClientTargetKind, McpServersMap, NormalizedServerConfig, TargetAction};
+use crate::domain::{CliSpec, ClientTargetKind, McpServersMap, NormalizedServerConfig};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use thiserror::Error;
@@ -84,59 +84,41 @@ pub fn build_cli_invocations(
     program: &str,
     servers: &McpServersMap,
 ) -> Result<Vec<CliInvocation>, CliError> {
-    if kind.action() != TargetAction::CliCommand {
-        return Err(CliError::NotCliTarget);
-    }
+    let spec = kind.cli_spec().ok_or(CliError::NotCliTarget)?;
 
     let mut invocations = Vec::new();
     for (name, config) in servers {
-        if needs_remove_before_add(kind) {
-            invocations.push(CliInvocation::new(program, remove_args(kind, name), true));
+        if spec.remove_before_add {
+            invocations.push(CliInvocation::new(program, remove_args(spec, name), true));
         }
         invocations.push(CliInvocation::new(
             program,
-            add_args(kind, name, config),
+            add_args(spec, name, config),
             false,
         ));
     }
     Ok(invocations)
 }
 
-/// Verified on real CLIs: `claude mcp add` and `copilot mcp add` reject an existing name;
-/// `codex mcp add` and `agy mcp add` upsert.
-fn needs_remove_before_add(kind: ClientTargetKind) -> bool {
-    matches!(
-        kind,
-        ClientTargetKind::ClaudeCli | ClientTargetKind::CopilotCli
-    )
-}
-
-fn remove_args(kind: ClientTargetKind, name: &str) -> Vec<String> {
+fn remove_args(spec: &CliSpec, name: &str) -> Vec<String> {
     let mut args: Vec<String> = vec!["mcp".into(), "remove".into()];
-    if kind == ClientTargetKind::ClaudeCli {
-        args.extend(["--scope".into(), "user".into()]);
+    if let Some(scope) = spec.scope {
+        args.extend(["--scope".into(), scope.into()]);
     }
     args.push(name.to_string());
     args
 }
 
-fn add_args(kind: ClientTargetKind, name: &str, config: &NormalizedServerConfig) -> Vec<String> {
+fn add_args(spec: &CliSpec, name: &str, config: &NormalizedServerConfig) -> Vec<String> {
     let mut args: Vec<String> = vec!["mcp".into(), "add".into()];
-    if kind == ClientTargetKind::ClaudeCli {
-        args.extend(["--scope".into(), "user".into()]);
+    if let Some(scope) = spec.scope {
+        args.extend(["--scope".into(), scope.into()]);
     }
-    // claude/codex/copilot: name は env フラグより前 (claude の `-e` は可変長で name を飲み込む)
-    // agy: フラグは name より前に置く必要がある
-    let env_flag = if kind == ClientTargetKind::ClaudeCli {
-        "-e"
-    } else {
-        "--env"
-    };
     let env_args = config
         .env
         .iter()
-        .flat_map(|(k, v)| [env_flag.to_string(), format!("{k}={v}")]);
-    if kind == ClientTargetKind::AntigravityCli {
+        .flat_map(|(k, v)| [spec.env_flag.to_string(), format!("{k}={v}")]);
+    if spec.flags_before_name {
         args.extend(env_args);
         args.push(name.to_string());
     } else {

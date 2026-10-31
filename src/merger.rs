@@ -141,12 +141,12 @@ fn vscode_user_dir(home: Option<&Path>) -> Option<std::path::PathBuf> {
     }
 }
 
-/// Parse existing config content. Zed's `settings.json` is JSONC, so fall back to JSON5
-/// (comments are not preserved on rewrite; the `.bak` copy keeps the original).
+/// Parse existing config content. Some clients' files are JSONC (e.g. Zed's `settings.json`), so
+/// fall back to JSON5 for them (comments are not preserved on rewrite; the `.bak` copy keeps the original).
 fn parse_existing(kind: ClientTargetKind, content: &str) -> Result<Value, MergeError> {
     match serde_json::from_str(content) {
         Ok(v) => Ok(v),
-        Err(e) if kind == ClientTargetKind::Zed => {
+        Err(e) if kind.file_spec().is_some_and(|file| file.allows_jsonc) => {
             json5::from_str(content).map_err(|_| MergeError::InvalidExistingJson(e.to_string()))
         }
         Err(e) => Err(MergeError::InvalidExistingJson(e.to_string())),
@@ -155,20 +155,9 @@ fn parse_existing(kind: ClientTargetKind, content: &str) -> Result<Value, MergeE
 
 /// The JSON key that holds the MCP servers for a file target.
 fn servers_key(kind: ClientTargetKind) -> Result<&'static str, MergeError> {
-    match kind {
-        ClientTargetKind::Claude
-        | ClientTargetKind::Cursor
-        | ClientTargetKind::Project
-        | ClientTargetKind::Windsurf
-        | ClientTargetKind::Cline
-        | ClientTargetKind::RooCode => Ok("mcpServers"),
-        ClientTargetKind::VsCode => Ok("github.copilot.chat.mcp"),
-        ClientTargetKind::Zed => Ok("context_servers"),
-        ClientTargetKind::ClaudeCli
-        | ClientTargetKind::CodexCli
-        | ClientTargetKind::CopilotCli
-        | ClientTargetKind::AntigravityCli => Err(MergeError::NotFileTarget),
-    }
+    kind.file_spec()
+        .map(|file| file.servers_key)
+        .ok_or(MergeError::NotFileTarget)
 }
 
 /// The JSON value written for one server (shared by merging and change detection so they agree).
@@ -179,8 +168,8 @@ fn server_value(
     let mut server_val =
         serde_json::to_value(config).map_err(|e| MergeError::SerializationFailed(e.to_string()))?;
 
-    // Claude requires/prefers "type": "stdio"
-    if kind == ClientTargetKind::Claude {
+    // Some clients (Claude) require/prefer "type": "stdio"
+    if kind.file_spec().is_some_and(|file| file.adds_stdio_type) {
         if let Some(obj) = server_val.as_object_mut() {
             if !obj.contains_key("type") {
                 obj.insert("type".to_string(), Value::String("stdio".to_string()));
