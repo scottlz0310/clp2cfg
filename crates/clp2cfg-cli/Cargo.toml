@@ -1,0 +1,19 @@
+[package]
+name = "clp2cfg-cli"
+# リリースの版（`clp2cfg --version` / `clp2cfg-cli --version` が出す版）。release-automate はこの 1 か所だけを書き換える
+version = "0.2.0"
+edition.workspace = true
+description = "Command line of clp2cfg: merge MCP server config snippets into AI client configurations"
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+arboard.workspace = true
+clap.workspace = true
+clp2cfg-core = { path = "../clp2cfg-core" }
+serde_json.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
