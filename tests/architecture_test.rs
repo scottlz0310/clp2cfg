@@ -121,6 +121,13 @@ const FILE_LAYERS: &[(&str, Layer)] = &[
     ("app::ports", Layer::GuiState),
     ("app::state", Layer::GuiState),
     ("app::system", Layer::GuiFrontend),
+    ("app::view", Layer::GuiFrontend),
+    ("app::view::bottom_bar", Layer::GuiFrontend),
+    ("app::view::input_pane", Layer::GuiFrontend),
+    ("app::view::preview_pane", Layer::GuiFrontend),
+    ("app::view::shortcuts", Layer::GuiFrontend),
+    ("app::view::target_pane", Layer::GuiFrontend),
+    ("app::view::top_bar", Layer::GuiFrontend),
     ("entry", Layer::Entry),
 ];
 
@@ -326,6 +333,27 @@ fn test_dependencies_follow_the_layers() {
     assert!(problems.is_empty(), "\n{}", problems.join("\n"));
 }
 
+/// view（`app::view` 配下）は状態を読むだけで、更新は `UiAction` として返す。
+/// 字句の検査なので、状態を可変で受け取る形と `update` の呼び出しだけを見る。
+#[test]
+fn test_views_only_read_the_state() {
+    let sources = collect_sources(Path::new("src"));
+    let views: Vec<_> = sources
+        .iter()
+        .filter(|(key, _)| key.starts_with("app::view"))
+        .collect();
+    assert!(!views.is_empty(), "app::view のファイルが見つからない");
+
+    for (key, source) in views {
+        let body = scanner::production_part(source);
+        for forbidden in ["&mut AppState", ".update("] {
+            assert!(
+                !body.contains(forbidden),
+                "`{key}` が `{forbidden}` を使っている。view は `&AppState` を読むだけにして、変更は UiAction で返してください"
+            );
+        }
+    }
+}
 #[test]
 fn test_allowlist_entries_are_documented_and_unique() {
     let mut seen = BTreeSet::new();
