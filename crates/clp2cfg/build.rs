@@ -26,10 +26,12 @@ fn package_version(manifest: &str) -> Option<String> {
     None
 }
 
-/// `major.minor.patch` を、Windows のバージョン情報の 64 ビット値（各 16 ビット）にする
+/// `major.minor.patch` を、Windows のバージョン情報の 64 ビット値（各 16 ビット）にする。
+/// プレリリース（`-rc.1`）とビルドメタデータ（`+build`）は数値にならないので、数値の部分だけを使う。
 #[cfg(windows)]
 fn packed_version(version: &str) -> Option<u64> {
-    let mut parts = version.split('.').map(|part| part.parse::<u64>().ok());
+    let numeric = version.split(['-', '+']).next()?;
+    let mut parts = numeric.split('.').map(|part| part.parse::<u64>().ok());
     let (major, minor, patch) = (parts.next()??, parts.next()??, parts.next()??);
     Some((major << 48) | (minor << 32) | (patch << 16))
 }

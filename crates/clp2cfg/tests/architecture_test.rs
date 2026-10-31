@@ -10,10 +10,13 @@ fn workspace_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
 }
 
-/// エントリポイントのファイル（GUI 版とコンソール版。workspace のルートからの相対パス）
-const ENTRY_POINTS: [&str; 2] = [
+/// エントリポイントと配線のファイル（GUI 版とコンソール版。workspace のルートからの相対パス）。
+/// `entry.rs` はカバレッジの対象外（`codecov.yml`）なので、薄さをここで行数で守る。
+const ENTRY_POINTS: [&str; 4] = [
     "crates/clp2cfg/src/main.rs",
     "crates/clp2cfg-cli/src/main.rs",
+    "crates/clp2cfg/src/entry.rs",
+    "crates/clp2cfg-cli/src/entry.rs",
 ];
 
 fn read_entry_point(path: &str) -> String {
@@ -142,7 +145,7 @@ const FILE_LAYERS: &[(&str, Layer)] = &[
     ("gui::entry", Layer::Entry),
 ];
 
-/// 検査の対象外（宣言だけのファイル。エントリポイントは `ENTRY_POINTS` で別に見る）
+/// 層の検査の対象外（宣言だけのファイル。`main.rs` は `ENTRY_POINTS` で別に見る）
 const SKIPPED_FILES: &[&str] = &["lib", "main"];
 
 /// GUI の道具。`gui` crate の中で、状態（`GuiState`）と描画（`GuiFrontend`）を分けるために見る

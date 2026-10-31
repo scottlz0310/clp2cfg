@@ -26,6 +26,9 @@ coverage:
   ignore:
     - "crates/clp2cfg/src/main.rs"
     - "crates/clp2cfg-cli/src/main.rs"
+    # OS・プロセス・ウィンドウの配線だけのファイル。薄さは tests/architecture_test.rs（ENTRY_POINTS）が行数で守る
+    - "crates/clp2cfg/src/entry.rs"
+    - "crates/clp2cfg-cli/src/entry.rs"
 
 comment:
   layout: "reach,diff,flags,tree"

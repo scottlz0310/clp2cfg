@@ -31,7 +31,7 @@ CI でも `bun run check`、Rust の format と Clippy、`cargo llvm-cov` によ
 
 ## アーキテクチャのガードレール
 
-- 各 bin の `main.rs`（`crates/clp2cfg/src/main.rs`、`crates/clp2cfg-cli/src/main.rs`）は起動処理と配線だけに保ち、80 行を超えないようにしてください。`crates/clp2cfg/tests/architecture_test.rs` が行数と主要ロジックの混入を確認します。
+- 各 bin の `main.rs` と `entry.rs`（`crates/clp2cfg/src/{main,entry}.rs`、`crates/clp2cfg-cli/src/{main,entry}.rs`）は起動処理と OS の配線だけに保ち、80 行を超えないようにしてください。これらはカバレッジの対象外（`codecov.yml`）なので、ロジックを置かず、テストできる `headless` / `app` に書いてください。`crates/clp2cfg/tests/architecture_test.rs` が行数と主要ロジックの混入を確認します。
 - パース、フィルター、クライアント検出、設定のマージ、ファイル書き込みは、それぞれの既存モジュール（`crates/clp2cfg-core/src/snippet/parser.rs`、`crates/clp2cfg-core/src/snippet/filter.rs`、`crates/clp2cfg-core/src/merge.rs`、`crates/clp2cfg-core/src/discovery.rs`、`crates/clp2cfg-core/src/writer.rs` など）に置いてください。
 - スニペットから「フィルタ済みのサーバー定義 + プレースホルダー」への変換は、`crates/clp2cfg-core/src/snippet/pipeline.rs` の `prepare` を通してください。GUI と headless が同じ経路を使うため、パース・フィルター・プレースホルダーの呼び出しを画面側に直接書かないでください。
 - 設定ファイルの保存には `crates/clp2cfg-core/src/writer.rs` の安全な書き込み処理を使ってください。既存ファイルのバックアップとアトミックな置き換えを維持します。
