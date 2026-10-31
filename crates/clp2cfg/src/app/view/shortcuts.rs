@@ -1,15 +1,19 @@
 use crate::app::{AppState, UiAction};
 
 /// キーボードショートカット (Esc, Ctrl+Enter, Ctrl+V)。Esc はウィンドウを閉じ、残りは操作として返す。
+///
+/// Ctrl+V は、キーイベントではなく貼り付けイベント（`Event::Paste`）で届く。eframe（egui-winit）が
+/// クリップボードのショートカットを貼り付けイベントに変換して、キーイベントを渡さないため。
 pub fn shortcuts(ui: &mut egui::Ui, state: &AppState) -> Vec<UiAction> {
     let esc_pressed = ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
     let ctrl_enter_pressed = ui.input_mut(|i| {
         i.consume_key(egui::Modifiers::COMMAND, egui::Key::Enter)
             || i.consume_key(egui::Modifiers::CTRL, egui::Key::Enter)
     });
-    let ctrl_v_pressed = ui.input_mut(|i| {
-        i.consume_key(egui::Modifiers::COMMAND, egui::Key::V)
-            || i.consume_key(egui::Modifiers::CTRL, egui::Key::V)
+    let paste_requested = ui.input(|i| {
+        i.events
+            .iter()
+            .any(|event| matches!(event, egui::Event::Paste(_)))
     });
 
     let mut actions = Vec::new();
@@ -26,11 +30,8 @@ pub fn shortcuts(ui: &mut egui::Ui, state: &AppState) -> Vec<UiAction> {
 
     // Ctrl+V: テキスト入力ウィジェットにフォーカスがない場合にクリップボードから読み取り
     // （テキスト入力中の通常の貼り付けは TextEdit 側で自動処理される）
-    if ctrl_v_pressed {
-        let has_text_focus = ui.memory(|m| m.focused().is_some());
-        if !has_text_focus {
-            actions.push(UiAction::ReadClipboard);
-        }
+    if paste_requested && !ui.ctx().text_edit_focused() {
+        actions.push(UiAction::ReadClipboard);
     }
     actions
 }
@@ -57,88 +58,133 @@ mod tests {
         state
     }
 
-    /// 1 フレームだけ、指定のキー入力で `shortcuts` を呼ぶ。返す操作と、閉じる指示の有無
-    fn press(state: &AppState, key: egui::Key, ctrl: bool) -> (Vec<UiAction>, bool) {
-        let ctx = egui::Context::default();
-        let mut raw_input = egui::RawInput::default();
-        raw_input.events.push(egui::Event::Key {
-            key,
-            physical_key: None,
-            pressed: true,
-            repeat: false,
-            modifiers: egui::Modifiers {
-                ctrl,
-                ..Default::default()
+    /// 実機で届く入力。Ctrl+V は、キーイベントではなく貼り付けイベントとして届く（eframe の変換）
+    #[derive(Clone, Copy)]
+    enum Input {
+        Key { key: egui::Key, ctrl: bool },
+        Paste,
+    }
+
+    fn event(input: Input) -> egui::Event {
+        match input {
+            Input::Key { key, ctrl } => egui::Event::Key {
+                key,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers {
+                    ctrl,
+                    ..Default::default()
+                },
             },
-        });
-        let mut actions = Vec::new();
-        let mut output = ctx.run_ui(raw_input, |ui| actions = shortcuts(ui, state));
-        output.textures_delta.clear();
-        let closes = output.viewport_output.values().any(|vp| {
+            Input::Paste => egui::Event::Paste("clipboard text".to_string()),
+        }
+    }
+
+    fn closes(output: &egui::FullOutput) -> bool {
+        output.viewport_output.values().any(|vp| {
             vp.commands
                 .iter()
                 .any(|cmd| matches!(cmd, egui::ViewportCommand::Close))
-        });
-        (actions, closes)
+        })
+    }
+
+    /// 1 フレームだけ、指定の入力で `shortcuts` を呼ぶ。返す操作と、閉じる指示の有無
+    fn press(state: &AppState, input: Input) -> (Vec<UiAction>, bool) {
+        let ctx = egui::Context::default();
+        let mut raw_input = egui::RawInput::default();
+        raw_input.events.push(event(input));
+        let mut actions = Vec::new();
+        let mut output = ctx.run_ui(raw_input, |ui| actions = shortcuts(ui, state));
+        output.textures_delta.clear();
+        (actions, closes(&output))
     }
 
     #[test]
     fn test_shortcuts_return_actions_and_only_escape_closes() {
         struct Case {
             name: &'static str,
-            key: egui::Key,
-            ctrl: bool,
+            input: Input,
             can_apply: bool,
             expected: Vec<UiAction>,
             closes: bool,
         }
+        let key = |key, ctrl| Input::Key { key, ctrl };
         let cases = [
             Case {
                 name: "Esc closes the window",
-                key: egui::Key::Escape,
-                ctrl: false,
+                input: key(egui::Key::Escape, false),
                 can_apply: true,
                 expected: vec![],
                 closes: true,
             },
             Case {
                 name: "Ctrl+Enter applies when something can be applied",
-                key: egui::Key::Enter,
-                ctrl: true,
+                input: key(egui::Key::Enter, true),
                 can_apply: true,
                 expected: vec![UiAction::Apply],
                 closes: false,
             },
             Case {
                 name: "Ctrl+Enter does nothing without a valid snippet and a target",
-                key: egui::Key::Enter,
-                ctrl: true,
+                input: key(egui::Key::Enter, true),
                 can_apply: false,
                 expected: vec![],
                 closes: false,
             },
             Case {
                 name: "Enter alone does nothing",
-                key: egui::Key::Enter,
-                ctrl: false,
+                input: key(egui::Key::Enter, false),
                 can_apply: true,
                 expected: vec![],
                 closes: false,
             },
             Case {
-                name: "Ctrl+V reads the clipboard when no text box has focus",
-                key: egui::Key::V,
-                ctrl: true,
+                name: "Ctrl+V (a paste event) reads the clipboard when no text box has focus",
+                input: Input::Paste,
                 can_apply: false,
                 expected: vec![UiAction::ReadClipboard],
+                closes: false,
+            },
+            Case {
+                name: "a bare V key is not a paste",
+                input: key(egui::Key::V, false),
+                can_apply: false,
+                expected: vec![],
                 closes: false,
             },
         ];
 
         for case in cases {
-            let (actions, closes) = press(&state(case.can_apply), case.key, case.ctrl);
+            let (actions, closes) = press(&state(case.can_apply), case.input);
             assert_eq!(actions, case.expected, "{}", case.name);
             assert_eq!(closes, case.closes, "{}", case.name);
         }
+    }
+
+    #[test]
+    fn test_paste_in_a_focused_text_box_is_left_to_the_text_box() {
+        let state = state(false);
+        let ctx = egui::Context::default();
+        let mut text = String::new();
+
+        // 1 フレーム目: テキスト欄にフォーカスを渡す
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            let response = ui.text_edit_singleline(&mut text);
+            response.request_focus();
+        });
+        output.textures_delta.clear();
+
+        // 2 フレーム目: 貼り付け。テキスト欄にフォーカスがあるので、クリップボードの読み取りは返さない
+        let mut raw_input = egui::RawInput::default();
+        raw_input.events.push(event(Input::Paste));
+        let mut actions = Vec::new();
+        let mut output = ctx.run_ui(raw_input, |ui| {
+            ui.text_edit_singleline(&mut text);
+            actions = shortcuts(ui, &state);
+        });
+        output.textures_delta.clear();
+
+        assert_eq!(actions, Vec::<UiAction>::new());
     }
 }
