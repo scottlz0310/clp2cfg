@@ -36,6 +36,11 @@ pub fn read_if_exists(path: &Path) -> std::io::Result<Option<String>> {
     }
 }
 
+/// Whether `path` is an existing regular file (its content is not read).
+pub fn is_file(path: &Path) -> bool {
+    path.is_file()
+}
+
 /// Remove a config file (used to undo a file the apply created).
 pub fn remove_file(path: &Path) -> std::io::Result<()> {
     fs::remove_file(path)

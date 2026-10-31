@@ -37,6 +37,7 @@ CI でも `bun run check`、Rust の format と Clippy、`cargo llvm-cov` によ
 - 設定ファイルの保存には `src/writer.rs` の安全な書き込み処理を使ってください。既存ファイルのバックアップとアトミックな置き換えを維持します。
 - クライアントへの適用（計画・書き込み・CLI の実行・取り消し）は、`src/apply/` を通してください。GUI と headless が同じ経路を使います。ファイルとサブプロセスは `TargetIo`（実体は `SystemIo`）経由でだけ触るため、画面側から `writer` や `delegate::exec` を直接呼ばないでください。テストでは `src/apply/fake.rs` のインメモリ fake を使えます。読み取れない既存ファイルを空として扱わず、エラーにする点も維持してください。
 - headless（`src/headless/`）は `args`（clap）を `use` しません。`HeadlessRequest` を受け取り、入力（クリップボード・標準入力）は `InputEnv`、クライアント検出は `TargetCatalog`、ファイルとサブプロセスは `TargetIo` で受けます。`Args` からの変換は `src/args.rs`、OS の実体の配線は `src/entry.rs` に置いてください。
+- GUI の状態と更新（`src/app/state.rs`・`action.rs`・`ports.rs`）は `egui` / `eframe` / `arboard` / ファイル操作を使いません。ユーザーの操作は `UiAction`、ファイルは `TargetIo`、クリップボードは `ClipboardSource` を通し、テストはフェイクで egui なしに書きます。描画（`mod.rs`）は状態を読んで `UiAction` を渡すだけにしてください。OS の実体（`ArboardClipboard`、フォント、アイコン）は `clipboard.rs` / `system.rs` に置きます。
 - マージ時は対象クライアントの MCP 設定だけを更新し、他の設定や未知のフィールドを保ってください。
 
 ### モジュールの依存方向
@@ -49,7 +50,8 @@ CI でも `bun run check`、Rust の format と Clippy、`cargo llvm-cov` によ
 | L1 純粋ロジック | パース、フィルター、マージ、コマンド生成                 | L0             | ファイル・OS・UI の操作          |
 | L2 副作用       | ファイルの書き込み・復元、クライアント検出、プロセス実行 | L0, L1         | UI                               |
 | L3 ユースケース | プレビュー、適用（副作用は port 経由）                   | L0-L2          | UI、ファイル・OS の直接操作      |
-| L4 frontend     | コマンドライン、GUI                                      | L0, L1, L3     | 他の frontend、L2 の直接呼び出し |
+| L4 GUI の状態   | `app/state.rs` など（状態と `UiAction` による更新）      | L0, L1, L3     | UI・OS、他の frontend、L2        |
+| L4 frontend     | コマンドライン、GUI の描画と OS 実装                     | L0, L1, L3     | 他の frontend、L2 の直接呼び出し |
 | L5 配線         | `entry.rs`                                               | すべて         | ロジック                         |
 
 - ファイルを追加・移動・削除したら、`FILE_LAYERS`（ファイル → 層の表）を同じ変更で更新してください。表に無いファイルがあるとテストが失敗します。

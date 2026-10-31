@@ -15,6 +15,8 @@ pub trait TargetIo {
     /// Put the `.bak` taken before an apply back in place.
     fn restore_backup(&self, path: &Path) -> Result<(), WriteError>;
     fn remove_config(&self, path: &Path) -> std::io::Result<()>;
+    /// Whether the config file exists as a regular file (also true when its content is unreadable).
+    fn config_exists(&self, path: &Path) -> bool;
     /// Run the commands of a CLI-delegated target, in order.
     fn run_cli(&self, invocations: &[CliInvocation]) -> Result<(), CliError>;
 }
@@ -37,6 +39,10 @@ impl TargetIo for SystemIo {
 
     fn remove_config(&self, path: &Path) -> std::io::Result<()> {
         writer::remove_file(path)
+    }
+
+    fn config_exists(&self, path: &Path) -> bool {
+        writer::is_file(path)
     }
 
     fn run_cli(&self, invocations: &[CliInvocation]) -> Result<(), CliError> {
