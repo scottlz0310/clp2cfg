@@ -109,6 +109,10 @@ const FILE_LAYERS: &[(&str, Layer)] = &[
     ("apply::undo", Layer::Apply),
     ("args", Layer::CliFrontend),
     ("headless", Layer::CliFrontend),
+    ("headless::input", Layer::CliFrontend),
+    ("headless::report", Layer::CliFrontend),
+    ("headless::request", Layer::CliFrontend),
+    ("headless::select", Layer::CliFrontend),
     ("app", Layer::GuiFrontend),
     ("entry", Layer::Entry),
 ];
@@ -147,7 +151,7 @@ fn may_depend_on(from: Layer, to: Layer) -> bool {
         )
 }
 
-/// 層の規則では表せない、ファイル単位の禁止（from, to, 理由）
+/// 層の規則では表せない、ファイル単位の禁止（from, to, 理由）。from は配下のファイル（`from::*`）にも効く
 const FORBIDDEN_EDGES: &[(&str, &str, &str)] = &[(
     "headless",
     "args",
@@ -163,24 +167,11 @@ struct Allowed {
 }
 
 /// 現状の違反。解消した PR が、その行を削除する。
-const ALLOWLIST: &[Allowed] = &[
-    Allowed {
-        key: "app -> crate::discovery",
-        reason: "GUI がクライアント検出を直接呼ぶ（検出は entry が行い、frontend へ渡す）",
-        issue: "#66",
-    },
-    Allowed {
-        key: "headless -> crate::discovery",
-        reason:
-            "ヘッドレス実行がクライアント検出を直接呼ぶ（検出は entry が行い、frontend へ渡す）",
-        issue: "#65",
-    },
-    Allowed {
-        key: "headless -> crate::args",
-        reason: "ヘッドレス実行が clap のパース結果（Args）を直接受ける",
-        issue: "#65",
-    },
-];
+const ALLOWLIST: &[Allowed] = &[Allowed {
+    key: "app -> crate::discovery",
+    reason: "GUI がクライアント検出を直接呼ぶ（検出は entry が行い、frontend へ渡す）",
+    issue: "#66",
+}];
 
 /// `src/` の対象ファイルを、キー（`app`、`frontend::gui::state` など）→ ソースで返す。
 fn collect_sources(dir: &Path) -> BTreeMap<String, String> {
@@ -270,7 +261,7 @@ fn find_violations(
                 );
             } else if let Some((_, _, why)) = forbidden_edges
                 .iter()
-                .find(|(f, t, _)| f == from && *t == to)
+                .find(|(f, t, _)| (from == *f || from.starts_with(&format!("{f}::"))) && *t == to)
             {
                 violations.insert(key, (*why).to_string());
             }
