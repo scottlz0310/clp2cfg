@@ -138,7 +138,22 @@ impl AppState {
                 self.env_overrides.clear();
                 self.reparse();
             }
-            UiAction::InputEdited => self.reparse(),
+            UiAction::SetInput(text) => {
+                self.raw_input = text;
+                self.reparse();
+            }
+            UiAction::SelectTarget(idx) => {
+                if idx < self.target_entries.len() {
+                    self.selected_target_idx = idx;
+                }
+            }
+            UiAction::SetTargetSelected { idx, selected } => {
+                if let Some(entry) = self.target_entries.get_mut(idx) {
+                    entry.selected = selected;
+                }
+            }
+            UiAction::SetRevealEnv(on) => self.reveal_env_inputs = on,
+            UiAction::SetAutoRead(on) => self.auto_read_clipboard = on,
             UiAction::SetReplaceNpxWithBunx(on) => {
                 self.replace_npx_with_bunx = on;
                 self.reparse();
@@ -1363,8 +1378,7 @@ mod tests {
 
         state.update(UiAction::SetReplacePipxWithUvx(false));
         assert!(!state.replace_pipx_with_uvx);
-        state.raw_input = SNIPPET.to_string();
-        state.update(UiAction::InputEdited);
+        state.update(UiAction::SetInput(SNIPPET.to_string()));
         assert!(state.parsed_config.as_ref().unwrap().contains_key("a"));
 
         state.update(UiAction::DryRun);
@@ -1381,6 +1395,53 @@ mod tests {
         assert!(state.raw_input.is_empty());
         assert!(state.parsed_config.is_err());
         assert!(state.placeholder_fields().is_empty());
+    }
+
+    #[test]
+    fn test_update_applies_what_the_views_ask_for() {
+        let temp = tempdir().unwrap();
+        let targets = vec![
+            make_test_target(temp.path(), ClientTargetKind::Cursor, "a.json"),
+            make_test_target(temp.path(), ClientTargetKind::Windsurf, "b.json"),
+        ];
+        let mut state = new_state(targets);
+        assert!(!state.target_entries[0].selected && !state.can_apply());
+
+        // 入力は内容全体で置き換わり、パースされる
+        state.update(UiAction::SetInput(SNIPPET.to_string()));
+        assert_eq!(state.raw_input, SNIPPET);
+        assert!(state.parsed_config.is_ok());
+
+        // ターゲットのチェック。範囲外の添字は無視する
+        state.update(UiAction::SetTargetSelected {
+            idx: 1,
+            selected: true,
+        });
+        assert!(!state.target_entries[0].selected && state.target_entries[1].selected);
+        assert!(state.can_apply());
+        state.update(UiAction::SetTargetSelected {
+            idx: 9,
+            selected: true,
+        });
+        state.update(UiAction::SetTargetSelected {
+            idx: 1,
+            selected: false,
+        });
+        assert!(!state.can_apply());
+
+        // 右ペインで見るターゲット
+        state.update(UiAction::SelectTarget(1));
+        assert_eq!(state.selected_target_idx, 1);
+        state.update(UiAction::SelectTarget(9));
+        assert_eq!(state.selected_target_idx, 1, "範囲外は無視する");
+
+        // 表示の切り替え
+        state.update(UiAction::SetRevealEnv(true));
+        assert!(state.reveal_env_inputs);
+        state.update(UiAction::SetAutoRead(false));
+        assert!(!state.auto_read_clipboard);
+        state.update(UiAction::SetAutoRead(true));
+        assert!(state.auto_read_clipboard);
     }
     #[test]
     fn test_startup_options_default_matches_gui_defaults() {

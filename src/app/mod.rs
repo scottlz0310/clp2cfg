@@ -104,7 +104,10 @@ impl Clp2cfgApp {
                         .color(egui::Color32::LIGHT_GREEN),
                 );
             }
-            ui.checkbox(&mut self.state.reveal_env_inputs, "値を表示");
+            let mut reveal = self.state.reveal_env_inputs;
+            if ui.checkbox(&mut reveal, "値を表示").changed() {
+                self.state.update(UiAction::SetRevealEnv(reveal));
+            }
         });
 
         let mut edits = Vec::new();
@@ -227,7 +230,10 @@ impl Clp2cfgApp {
                     self.state.update(UiAction::SetReplacePipxWithUvx(replace_pipx));
                 }
 
-                ui.checkbox(&mut self.state.auto_read_clipboard, "自動読み取り");
+                let mut auto_read = self.state.auto_read_clipboard;
+                if ui.checkbox(&mut auto_read, "自動読み取り").changed() {
+                    self.state.update(UiAction::SetAutoRead(auto_read));
+                }
             });
         });
 
@@ -326,7 +332,8 @@ impl Clp2cfgApp {
                 ui.add_space(4.0);
 
                 // テキスト入力エリア
-                let text_edit = egui::TextEdit::multiline(&mut self.state.raw_input)
+                let mut input = self.state.raw_input.clone();
+                let text_edit = egui::TextEdit::multiline(&mut input)
                     .font(egui::TextStyle::Monospace)
                     .code_editor()
                     .desired_width(f32::INFINITY)
@@ -334,7 +341,7 @@ impl Clp2cfgApp {
 
                 let response = ui.add(text_edit);
                 if response.changed() {
-                    self.state.update(UiAction::InputEdited);
+                    self.state.update(UiAction::SetInput(input));
                 }
 
                 self.render_placeholder_inputs(ui);
@@ -393,10 +400,14 @@ impl Clp2cfgApp {
                 .id_salt("target_list")
                 .max_height(ui.available_height() * TARGET_LIST_HEIGHT_RATIO)
                 .show(ui, |ui| {
-                    for (idx, entry) in self.state.target_entries.iter_mut().enumerate() {
+                    let mut actions = Vec::new();
+                    for (idx, entry) in self.state.target_entries.iter().enumerate() {
                         let is_active = idx == self.state.selected_target_idx;
                         ui.horizontal(|ui| {
-                            ui.checkbox(&mut entry.selected, "");
+                            let mut selected = entry.selected;
+                            if ui.checkbox(&mut selected, "").changed() {
+                                actions.push(UiAction::SetTargetSelected { idx, selected });
+                            }
 
                             let exists = entry.target.exists;
                             let is_cli = entry.target.kind.action() == TargetAction::CliCommand;
@@ -414,7 +425,7 @@ impl Clp2cfgApp {
                             let text = egui::RichText::new(&entry.target.name);
                             let text = if is_active { text.strong() } else { text };
                             if ui.selectable_label(is_active, text).clicked() {
-                                self.state.selected_target_idx = idx;
+                                actions.push(UiAction::SelectTarget(idx));
                             }
 
                             let overwrites = entry.overwrite_count();
@@ -439,6 +450,9 @@ impl Clp2cfgApp {
                             )
                             .on_hover_text(path.as_ref());
                         });
+                    }
+                    for action in actions {
+                        self.state.update(action);
                     }
                 });
 
@@ -570,8 +584,9 @@ mod tests {
         let temp = tempdir().unwrap();
         let target = make_test_target(temp.path(), ClientTargetKind::Claude, "claude.json");
         let mut app = new_app(vec![target]);
-        app.state.raw_input = r#"{"fetch": {"command": "npx", "args": ["fetch"]}}"#.to_string();
-        app.state.update(UiAction::InputEdited);
+        app.state.update(UiAction::SetInput(
+            r#"{"fetch": {"command": "npx", "args": ["fetch"]}}"#.to_string(),
+        ));
 
         let ctx = egui::Context::default();
 
@@ -579,8 +594,8 @@ mod tests {
         run_headless(&ctx, &mut app);
 
         // 2. パースエラー状態でのレンダリング
-        app.state.raw_input = "{ invalid json }".to_string();
-        app.state.update(UiAction::InputEdited);
+        app.state
+            .update(UiAction::SetInput("{ invalid json }".to_string()));
         run_headless(&ctx, &mut app);
 
         // 3. エラーメッセージあり状態でのレンダリング
@@ -640,8 +655,9 @@ mod tests {
         let target = make_test_target(temp.path(), ClientTargetKind::Cursor, "mcp.json");
         let mut app = new_app(vec![target]);
         app.state.auto_read_clipboard = false;
-        app.state.raw_input = r#"{"test": {"command": "echo"}}"#.to_string();
-        app.state.update(UiAction::InputEdited);
+        app.state.update(UiAction::SetInput(
+            r#"{"test": {"command": "echo"}}"#.to_string(),
+        ));
         app.state.target_entries[0].selected = true;
 
         let ctx = egui::Context::default();
@@ -754,8 +770,7 @@ mod tests {
         let mut app = new_app(vec![file_target, cli_target]);
         app.state.auto_read_clipboard = false;
         app.state.selected_target_idx = 1;
-        app.state.raw_input = r#"{"srv":{"command":"uvx","args":["mcp-server-everything-and-more"],"env":{"E2E_KEY":"value with space"}}}"#.to_string();
-        app.state.update(UiAction::InputEdited);
+        app.state.update(UiAction::SetInput(r#"{"srv":{"command":"uvx","args":["mcp-server-everything-and-more"],"env":{"E2E_KEY":"value with space"}}}"#.to_string()));
 
         let ctx = egui::Context::default();
         let raw_input = egui::RawInput {
@@ -794,8 +809,7 @@ mod tests {
         ]);
         app.state.auto_read_clipboard = false;
         app.state.replace_npx_with_bunx = false;
-        app.state.raw_input = r#"{"same":{"command":"node","args":["a"]},"diff":{"command":"new"},"fresh":{"command":"x"}}"#.to_string();
-        app.state.update(UiAction::InputEdited);
+        app.state.update(UiAction::SetInput(r#"{"same":{"command":"node","args":["a"]},"diff":{"command":"new"},"fresh":{"command":"x"}}"#.to_string()));
 
         let entry = &app.state.target_entries[0];
         let changes = entry.changes.as_ref().unwrap();
@@ -819,11 +833,10 @@ mod tests {
         run_headless(&ctx, &mut app);
 
         // 入力が無効になれば判定も消える
-        app.state.raw_input = "{ invalid".to_string();
-        app.state.update(UiAction::InputEdited);
+        app.state
+            .update(UiAction::SetInput("{ invalid".to_string()));
         assert!(app.state.target_entries.iter().all(|e| e.changes.is_none()));
-        app.state.raw_input.clear();
-        app.state.update(UiAction::InputEdited);
+        app.state.update(UiAction::SetInput(String::new()));
         assert!(app.state.target_entries.iter().all(|e| e.changes.is_none()));
     }
 
@@ -851,8 +864,9 @@ mod tests {
         )]);
         app.state.selected_target_idx = 0;
         app.state.target_entries[0].selected = true;
-        app.state.raw_input = r#"{"srv":{"command":"node"}}"#.to_string();
-        app.state.update(UiAction::InputEdited);
+        app.state.update(UiAction::SetInput(
+            r#"{"srv":{"command":"node"}}"#.to_string(),
+        ));
         app.state.update(UiAction::Apply);
         assert!(app.state.undo_hint().is_some());
 

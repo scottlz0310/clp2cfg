@@ -2,8 +2,8 @@
 
 use crate::snippet::placeholder::EnvRef;
 
-/// An operation that changes more than what is shown (parsing, applying, reading the clipboard…).
-/// Purely visual state (which target is highlighted, the checkboxes, "show values") is plain fields.
+/// Every change a view asks of [`super::AppState`]. Views only read the state and return these;
+/// the window applies them at the end of the frame.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum UiAction {
     /// 手動操作（ボタン・Ctrl+V）: クリップボードの内容を問わず入力欄へ取り込む
@@ -12,8 +12,19 @@ pub enum UiAction {
     AutoReadClipboard,
     /// 入力欄と、入力済みのプレースホルダー実値を空にする
     Clear,
-    /// 入力欄（`raw_input`）がウィジェットで編集された
-    InputEdited,
+    /// 入力欄が編集された（新しい内容全体）
+    SetInput(String),
+    /// 右ペインで差分を表示するターゲットを選ぶ
+    SelectTarget(usize),
+    /// 「適用」の対象にするかを切り替える
+    SetTargetSelected {
+        idx: usize,
+        selected: bool,
+    },
+    /// プレースホルダー入力欄の値を平文で表示するか
+    SetRevealEnv(bool),
+    /// フォーカス獲得時の自動読み取りトグル（次回起動へ永続化される）
+    SetAutoRead(bool),
     SetReplaceNpxWithBunx(bool),
     SetReplacePipxWithUvx(bool),
     /// プレースホルダーの実値を入力した（空文字は入力の取り消し）

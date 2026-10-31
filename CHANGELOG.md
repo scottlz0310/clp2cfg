@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - クライアントへの適用（計画・書き込み・CLI の実行・結果の集計・取り消し）を `apply` モジュールに一本化し、GUI と headless の重複を解消。ファイルとサブプロセスの操作を `TargetIo`（port）経由にして、インメモリ fake でテストできるようにした（`preview.rs` / `undo.rs` は `apply/` に統合）。パスがディレクトリのときのエラーメッセージが「設定ファイルを読み取れません」になる以外、挙動は不変（内部変更）（#64）
 - headless を clap の `Args` から分離（内部変更）。`headless.rs` を `headless/`（実行・入力の解決・対象の選択・出力）に分割し、`HeadlessRequest` を受ける形にして、入力（クリップボード・標準入力）とクライアント検出を別々の port で受ける。OS の実装は `entry.rs` に集約。`--help` / `--version` の出力、終了コード、出力は変わらない。
 - GUI の状態と更新ロジックを egui から分離（内部変更）。`app.rs` を `app/`（状態・操作・クリップボード・システム設定・描画）に分割し、状態は `AppState` / `UiAction` として egui・eframe・arboard に依存しない。クリップボードとファイル I/O は port で注入し、`ClientTarget.selected` は GUI 側の `TargetEntry` に移す。画面の見た目・文言・ショートカット・永続化キーは変わらない。
+- GUI の描画（`render_ui`）をパネルごとの view（`app/view/`: トップバー・ボトムバー・入力・ターゲット一覧・プレビュー・ショートカット）に分割（内部変更）。view は `AppState` を読むだけで、操作は `UiAction` として返し、フレームの終わりにまとめて反映する。画面の見た目・文言・ショートカットは変わらない。
 
 ### Fixed
 
