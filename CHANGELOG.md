@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `bunfig.toml` に `minimumReleaseAge = 259200`（3 日）を、`.cargo/config.toml` に `registry.global-min-publish-age = "3 days"`（Rust 1.100 以降で有効）を追加。公開から 3 日未満の版・クレートを新規に解決しない。lock file maintenance は Renovate の minimumReleaseAge を迂回するため、無人の自動マージに対する防御としてパッケージマネージャ側で止める
+
 ## [0.3.0] - 2026-10-31
 
 ### Changed
