@@ -19,7 +19,7 @@ permissions: {}
 jobs:
   draft:
     if: github.event_name == 'push'
-    uses: scottlz0310/release-automate/.github/workflows/reusable-publish-release.yml@3c860f1b178eb5b942d87c800153bc47887a7bfd # v3.2.1
+    uses: scottlz0310/release-automate/.github/workflows/reusable-publish-release.yml@b155081b04cae981e8ae3beeb37aa1c024866ea2 # v3.3.0
     permissions:
       contents: write
     with:
@@ -144,9 +144,13 @@ jobs:
   finalize:
     needs: [draft, attach]
     if: ${{ !cancelled() && needs.draft.outputs.release_state == 'draft' && needs.attach.result == 'success' }}
-    uses: scottlz0310/release-automate/.github/workflows/reusable-finalize-release.yml@3c860f1b178eb5b942d87c800153bc47887a7bfd # v3.2.1
+    uses: scottlz0310/release-automate/.github/workflows/reusable-finalize-release.yml@b155081b04cae981e8ae3beeb37aa1c024866ea2 # v3.3.0
     permissions:
       contents: write
     with:
       tag_name: ${{ needs.draft.outputs.tag_name }}
       target_sha: ${{ needs.draft.outputs.target_sha }}
+      notify_scoop_bucket: true
+    secrets:
+      RELEASE_BOT_CLIENT_ID: ${{ secrets.RELEASE_BOT_CLIENT_ID }}
+      RELEASE_BOT_PRIVATE_KEY: ${{ secrets.RELEASE_BOT_PRIVATE_KEY }}

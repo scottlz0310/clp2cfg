@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- `release.yml` と `prepare-release.yml` の `release-automate` 参照を `v3.3.0` に更新し、`finalize` で `notify_scoop_bucket: true` を有効化してリリース公開後に `scottlz0310/scoop-bucket` へ `repository_dispatch` を送信するように変更
+
 ## [0.3.1] - 2026-11-14
 
 ### Added
