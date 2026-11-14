@@ -642,4 +642,73 @@ mod tests {
         }
         assert_eq!(std::fs::read_to_string(&env.targets[0].path).unwrap(), "{}");
     }
+
+    #[test]
+    fn test_remote_mcp_dry_run_and_apply_across_file_and_cli_targets() {
+        let dir = tempdir().unwrap();
+        let cursor = file_target(dir.path(), ClientTargetKind::Cursor, "mcp.json", Some("{}"));
+        let env = FakeEnv::new(vec![
+            cursor.clone(),
+            cli_target(ClientTargetKind::ClaudeCli),
+            cli_target(ClientTargetKind::CodexCli),
+        ]);
+        let snippet = r#"{
+            "mcpServers": {
+                "cloudflare-api": {
+                    "type": "http",
+                    "url": "https://mcp.cloudflare.com/mcp",
+                    "headers": {
+                        "Authorization": "Bearer secret-cf-token"
+                    }
+                }
+            }
+        }"#;
+
+        let dry = run_args(
+            &args(&[
+                "--dry-run",
+                "--target",
+                "cursor,claude-cli,codex-cli",
+                snippet,
+            ]),
+            &env,
+        );
+        // codex-cli は headers 非対応のため失敗するが、他ターゲットの計画は出力される
+        assert_eq!(dry.exit_code, EXIT_FAILED, "{dry:?}");
+        assert!(!dry.stdout.contains("secret-cf-token"), "{}", dry.stdout);
+        assert!(dry.stdout.contains("Authorization"), "{}", dry.stdout);
+        assert!(dry.stdout.contains("--transport http cloudflare-api https://mcp.cloudflare.com/mcp -H 'Authorization: ***'"), "{}", dry.stdout);
+        assert!(dry.stderr.contains("Codex CLI"), "{}", dry.stderr);
+
+        // headers なしのユーザー提示スニペットなら codex-cli を含む全ターゲットで成功する
+        let plain_snippet = r#"{
+            "mcpServers": {
+                "cloudflare-api": {
+                    "type": "http",
+                    "url": "https://mcp.cloudflare.com/mcp"
+                }
+            }
+        }"#;
+        let applied = run_args(
+            &args(&[
+                "--apply",
+                "--target",
+                "cursor,claude-cli,codex-cli",
+                plain_snippet,
+            ]),
+            &env,
+        );
+        assert_eq!(applied.exit_code, EXIT_OK, "{applied:?}");
+        let written: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&cursor.path).unwrap()).unwrap();
+        assert_eq!(written["mcpServers"]["cloudflare-api"]["type"], "http");
+        assert_eq!(
+            written["mcpServers"]["cloudflare-api"]["url"],
+            "https://mcp.cloudflare.com/mcp"
+        );
+        let calls = env.cli_calls.borrow();
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[0].len(), 2);
+        assert_eq!(calls[1].len(), 1);
+    }
 }

@@ -1,6 +1,6 @@
 //! Command and runtime filters (e.g., npx to bunx, pipx run to uvx replacement).
 
-use crate::domain::NormalizedServerConfig;
+use crate::domain::{NormalizedServerConfig, ServerTransport};
 
 /// Options controlling command filters.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -23,11 +23,15 @@ pub fn apply_filters(
     mut config: NormalizedServerConfig,
     options: &FilterOptions,
 ) -> NormalizedServerConfig {
-    if options.replace_npx_with_bunx && config.command == "npx" {
-        config.command = "bunx".to_string();
+    let ServerTransport::Stdio { command, args, .. } = &mut config.transport else {
+        return config;
+    };
+
+    if options.replace_npx_with_bunx && command == "npx" {
+        *command = "bunx".to_string();
     }
     if options.replace_pipx_with_uvx {
-        replace_pipx_run_with_uvx(&mut config);
+        replace_pipx_run_with_uvx(command, args);
     }
     config
 }
@@ -37,16 +41,13 @@ pub fn apply_filters(
 /// 同じ意味に変換できる素直な形だけを対象にする。`pipx run` 固有のオプション
 /// （`--spec` / `--python` 等）や、URL・パス・バージョン指定つきの引数は `uvx` と構文が
 /// 異なり、機械的に書き換えると別物になるため、そのまま残す。
-fn replace_pipx_run_with_uvx(config: &mut NormalizedServerConfig) {
-    let is_plain_run = config.command == "pipx"
-        && config.args.first().map(String::as_str) == Some("run")
-        && config
-            .args
-            .get(1)
-            .is_some_and(|app| is_plain_package_name(app));
+fn replace_pipx_run_with_uvx(command: &mut String, args: &mut Vec<String>) {
+    let is_plain_run = command == "pipx"
+        && args.first().map(String::as_str) == Some("run")
+        && args.get(1).is_some_and(|app| is_plain_package_name(app));
     if is_plain_run {
-        config.command = "uvx".to_string();
-        config.args.remove(0);
+        *command = "uvx".to_string();
+        args.remove(0);
     }
 }
 
@@ -65,7 +66,9 @@ mod tests {
 
     fn create_test_config(command: &str) -> NormalizedServerConfig {
         let mut config = NormalizedServerConfig::new(command);
-        config.args = vec!["arg1".to_string()];
+        if let ServerTransport::Stdio { args, .. } = &mut config.transport {
+            *args = vec!["arg1".to_string()];
+        }
         config
     }
 
@@ -113,7 +116,8 @@ mod tests {
             };
             let filtered = apply_filters(config, &options);
             assert_eq!(
-                filtered.command, case.expected_command,
+                filtered.command(),
+                Some(case.expected_command),
                 "Failed case: {}",
                 case.name
             );
@@ -224,7 +228,9 @@ mod tests {
 
         for case in cases {
             let mut config = NormalizedServerConfig::new(case.command);
-            config.args = case.args.iter().map(|a| a.to_string()).collect();
+            if let ServerTransport::Stdio { args, .. } = &mut config.transport {
+                *args = case.args.iter().map(|a| a.to_string()).collect();
+            }
             let options = FilterOptions {
                 replace_npx_with_bunx: false,
                 replace_pipx_with_uvx: case.enabled,
@@ -233,16 +239,26 @@ mod tests {
             let filtered = apply_filters(config, &options);
 
             assert_eq!(
-                filtered.command, case.expected_command,
+                filtered.command(),
+                Some(case.expected_command),
                 "command, case: {}",
                 case.name
             );
             assert_eq!(
-                filtered.args, case.expected_args,
+                filtered.args(),
+                case.expected_args,
                 "args, case: {}",
                 case.name
             );
         }
+    }
+
+    #[test]
+    fn test_apply_filters_leaves_remote_unchanged() {
+        let remote = NormalizedServerConfig::remote("https://mcp.cloudflare.com/mcp")
+            .with_transport_type("http");
+        let filtered = apply_filters(remote.clone(), &FilterOptions::default());
+        assert_eq!(filtered, remote);
     }
 
     #[test]

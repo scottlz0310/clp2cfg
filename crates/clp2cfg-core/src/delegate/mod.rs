@@ -19,4 +19,11 @@ pub enum CliError {
 
     #[error("'{command}' exited with failure: {message}")]
     CommandFailed { command: String, message: String },
+
+    #[error("'{program}' does not support {reason} for server '{server}'")]
+    UnsupportedServer {
+        program: String,
+        server: String,
+        reason: String,
+    },
 }

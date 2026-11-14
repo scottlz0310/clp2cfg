@@ -57,7 +57,7 @@ mod tests {
         prepared
             .servers
             .iter()
-            .map(|(name, config)| (name.as_str(), config.command.as_str()))
+            .map(|(name, config)| (name.as_str(), config.command().unwrap_or("")))
             .collect()
     }
 
@@ -139,7 +139,7 @@ mod tests {
             server: "srv".to_string(),
             key: "API_KEY".to_string(),
         };
-        let env_of = |p: &Prepared, key: &str| p.servers["srv"].env[key].clone();
+        let env_of = |p: &Prepared, key: &str| p.servers["srv"].env().unwrap()[key].clone();
 
         // 実値が無ければ、プレースホルダーのまま報告される（実値のある MODE は対象外）
         let unfilled = prepared(text, &ALL_ON);
@@ -168,7 +168,10 @@ mod tests {
         let result = prepare(text, &ALL_ON, &stale).unwrap();
 
         assert!(result.placeholders.is_empty());
-        assert_eq!(result.servers["srv"].env["API_KEY"], "real-value");
+        assert_eq!(
+            result.servers["srv"].env().unwrap()["API_KEY"],
+            "real-value"
+        );
     }
 
     #[test]

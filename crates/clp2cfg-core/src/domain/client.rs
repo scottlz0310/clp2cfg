@@ -1,5 +1,6 @@
 //! Client target kinds, what differs between clients (as data), and where their configuration lives.
 
+use super::server::RemoteTransportKind;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -53,6 +54,31 @@ pub enum ApplySpec {
     Cli(CliSpec),
 }
 
+/// How a file target formats the `type` field of remote HTTP/SSE servers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RemoteFileTypeStyle {
+    /// Standard targets (`"http"` / `"sse"`): keep omitted `type` omitted, and normalize HTTP
+    /// aliases (`streamable-http`, `streamableHttp`) to `"http"`.
+    HttpOrOmit,
+    /// Targets requiring an explicit client-specific HTTP type (e.g. `"streamableHttp"` for Cline,
+    /// `"streamable-http"` for Roo Code): both omitted `type` and HTTP aliases map to `http_type`.
+    ExplicitHttp { http_type: &'static str },
+}
+
+impl RemoteFileTypeStyle {
+    /// Resolve the JSON `"type"` value to emit for a remote server, or `None` if the transport is
+    /// unsupported. Inner `None` means omit the `"type"` field.
+    pub fn resolve_type(self, transport_type: Option<&str>) -> Option<Option<&'static str>> {
+        match RemoteTransportKind::parse(transport_type)? {
+            RemoteTransportKind::Sse => Some(Some("sse")),
+            RemoteTransportKind::Http { explicit } => match self {
+                Self::HttpOrOmit => Some(explicit.then_some("http")),
+                Self::ExplicitHttp { http_type } => Some(Some(http_type)),
+            },
+        }
+    }
+}
+
 /// A client whose config file is merged directly.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FileSpec {
@@ -62,6 +88,20 @@ pub struct FileSpec {
     pub allows_jsonc: bool,
     /// Each server gets `"type": "stdio"` when it has no `type`.
     pub adds_stdio_type: bool,
+    /// How remote HTTP/SSE `type` values are formatted in this file target.
+    pub remote_type: RemoteFileTypeStyle,
+}
+
+/// How a CLI registers remote HTTP/SSE servers (`<program> mcp add ...`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RemoteCliStyle {
+    /// `<transport_flag> <http|sse> ... <name> <url>` (`claude`, `copilot`, `agy`).
+    TransportAndPositionalUrl {
+        transport_flag: &'static str,
+        supports_sse: bool,
+    },
+    /// `<name> --url <url>` (`codex`).
+    UrlFlag,
 }
 
 /// A client reached through its official CLI (`<program> mcp add ...`).
@@ -79,12 +119,20 @@ pub struct CliSpec {
     /// The env flags go before the server name (`agy` requires it). Otherwise they go after the
     /// name: `claude`'s variadic `-e` would swallow a name that comes after it.
     pub flags_before_name: bool,
+    /// Flag that passes one `Key: Value` HTTP header, or `None` if unsupported (e.g. `codex`).
+    pub header_flag: Option<&'static str>,
+    /// Whether header flags must appear before `<name>` (`agy` requires it; `claude`'s variadic `-H`
+    /// would swallow `<name>` if placed before it).
+    pub headers_before_name: bool,
+    /// How remote HTTP/SSE servers are passed.
+    pub remote: RemoteCliStyle,
 }
 
 const MCP_SERVERS_FILE: FileSpec = FileSpec {
     servers_key: "mcpServers",
     allows_jsonc: false,
     adds_stdio_type: false,
+    remote_type: RemoteFileTypeStyle::HttpOrOmit,
 };
 
 const DEFAULT_CLI: CliSpec = CliSpec {
@@ -93,6 +141,12 @@ const DEFAULT_CLI: CliSpec = CliSpec {
     scope: None,
     env_flag: "--env",
     flags_before_name: false,
+    header_flag: Some("--header"),
+    headers_before_name: true,
+    remote: RemoteCliStyle::TransportAndPositionalUrl {
+        transport_flag: "--transport",
+        supports_sse: true,
+    },
 };
 
 static CLAUDE: ClientSpec = ClientSpec {
@@ -134,13 +188,23 @@ static WINDSURF: ClientSpec = ClientSpec {
 static CLINE: ClientSpec = ClientSpec {
     cli_name: "cline",
     display_name: "Cline (VS Code)",
-    apply: ApplySpec::File(MCP_SERVERS_FILE),
+    apply: ApplySpec::File(FileSpec {
+        remote_type: RemoteFileTypeStyle::ExplicitHttp {
+            http_type: "streamableHttp",
+        },
+        ..MCP_SERVERS_FILE
+    }),
 };
 
 static ROO_CODE: ClientSpec = ClientSpec {
     cli_name: "roo-code",
     display_name: "Roo Code (VS Code)",
-    apply: ApplySpec::File(MCP_SERVERS_FILE),
+    apply: ApplySpec::File(FileSpec {
+        remote_type: RemoteFileTypeStyle::ExplicitHttp {
+            http_type: "streamable-http",
+        },
+        ..MCP_SERVERS_FILE
+    }),
 };
 
 static ZED: ClientSpec = ClientSpec {
@@ -161,6 +225,8 @@ static CLAUDE_CLI: ClientSpec = ClientSpec {
         remove_before_add: true,
         scope: Some("user"),
         env_flag: "-e",
+        header_flag: Some("-H"),
+        headers_before_name: false,
         ..DEFAULT_CLI
     }),
 };
@@ -170,6 +236,9 @@ static CODEX_CLI: ClientSpec = ClientSpec {
     display_name: "Codex CLI",
     apply: ApplySpec::Cli(CliSpec {
         program: "codex",
+        header_flag: None,
+        headers_before_name: false,
+        remote: RemoteCliStyle::UrlFlag,
         ..DEFAULT_CLI
     }),
 };
@@ -190,6 +259,10 @@ static ANTIGRAVITY_CLI: ClientSpec = ClientSpec {
     apply: ApplySpec::Cli(CliSpec {
         program: "agy",
         flags_before_name: true,
+        remote: RemoteCliStyle::TransportAndPositionalUrl {
+            transport_flag: "--type",
+            supports_sse: false,
+        },
         ..DEFAULT_CLI
     }),
 };
@@ -445,10 +518,30 @@ mod tests {
                     assert_eq!(kind.file_spec(), Some(file), "{kind:?}");
                     assert_eq!(kind.cli_spec(), None, "{kind:?}");
                     assert_eq!(kind.cli_program(), None, "{kind:?}");
+                    assert!(
+                        matches!(file.remote_type.resolve_type(Some("http")), Some(Some(_))),
+                        "{kind:?}"
+                    );
+                    assert_eq!(
+                        file.remote_type.resolve_type(Some("sse")),
+                        Some(Some("sse")),
+                        "{kind:?}"
+                    );
+                    if let RemoteFileTypeStyle::ExplicitHttp { http_type } = file.remote_type {
+                        assert!(!http_type.is_empty(), "{kind:?}");
+                        assert_eq!(
+                            file.remote_type.resolve_type(None),
+                            Some(Some(http_type)),
+                            "{kind:?}"
+                        );
+                    }
                 }
                 ApplySpec::Cli(cli) => {
                     assert!(!cli.program.is_empty(), "{kind:?}");
                     assert!(cli.env_flag.starts_with('-'), "{kind:?}");
+                    if let Some(header_flag) = cli.header_flag {
+                        assert!(header_flag.starts_with('-'), "{kind:?}");
+                    }
                     assert_eq!(kind.action(), TargetAction::CliCommand, "{kind:?}");
                     assert_eq!(kind.cli_spec(), Some(cli), "{kind:?}");
                     assert_eq!(kind.file_spec(), None, "{kind:?}");

@@ -35,13 +35,13 @@ impl Report {
     }
 }
 
-/// A copy of `servers` with every env value replaced by [`MASK`].
-fn mask_env(servers: &McpServersMap) -> McpServersMap {
+/// A copy of `servers` with every env/header secret value replaced by [`MASK`].
+fn mask_secrets(servers: &McpServersMap) -> McpServersMap {
     servers
         .iter()
         .map(|(name, config)| {
             let mut masked = config.clone();
-            for value in masked.env.values_mut() {
+            for value in masked.secret_fields_mut().values_mut() {
                 *value = MASK.to_string();
             }
             (name.clone(), masked)
@@ -90,11 +90,11 @@ pub(super) fn dry_run(
     show_secrets: bool,
     io: &dyn TargetIo,
 ) -> Report {
-    // env の値（API キー等）をログやターミナル履歴に残さないよう、表示用は伏せる
+    // env や headers の値（API キー等）をログやターミナル履歴に残さないよう、表示用は伏せる
     let shown = if show_secrets {
         servers.clone()
     } else {
-        mask_env(servers)
+        mask_secrets(servers)
     };
 
     let mut out = String::new();
