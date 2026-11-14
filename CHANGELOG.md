@@ -13,7 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- `type: "http"` や `url` / `serverUrl` を持つリモート MCP サーバー定義（HTTP / SSE / Streamable HTTP）を登録しようとすると `missing field command` でパースエラーになる問題を修正。名前なし単一サーバー定義の URL ホスト名からのサーバー名推論、ファイルターゲットへのマージ（Claude でリモートサーバーに `"type": "stdio"` を付与しない制御）、公式 CLI 委譲（`claude` / `copilot` / `agy` / `codex` の各構文と、非対応の `headers` / `sse` に対するターゲット別エラー）、`headers` のプレースホルダー入力・`--dry-run` / CLI エラー時のマスクにも対応
+- `type: "http"` や `url` / `serverUrl` を持つリモート MCP サーバー定義（HTTP / SSE / Streamable HTTP）を登録しようとすると `missing field command` でパースエラーになる問題を修正。名前なし単一サーバー定義の URL ホスト名からのサーバー名推論、ファイルターゲットへのマージ（Claude でリモートサーバーに `"type": "stdio"` を付与しない制御、Cline 向け `"streamableHttp"`・Roo Code 向け `"streamable-http"` への HTTP トランスポート変換、不正なリモートトランスポートの検出）、公式 CLI 委譲（`claude` / `copilot` / `agy` / `codex` の各構文と、非対応の `headers` / `sse` に対するターゲット別エラー）、`headers` のプレースホルダー入力・`--dry-run` / CLI エラー時のマスクにも対応
 
 ## [0.3.0] - 2026-10-31
 

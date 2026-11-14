@@ -19,6 +19,15 @@ pub enum MergeError {
 
     #[error("Target is applied via its CLI, not by file merge")]
     NotFileTarget,
+
+    #[error(
+        "Target '{target}' does not support remote transport '{transport}' for server '{server}'"
+    )]
+    UnsupportedRemoteTransport {
+        target: &'static str,
+        server: String,
+        transport: String,
+    },
 }
 
 /// Parse existing config content. Some clients' files are JSONC (e.g. Zed's `settings.json`), so
@@ -43,16 +52,33 @@ fn servers_key(kind: ClientTargetKind) -> Result<&'static str, MergeError> {
 /// The JSON value written for one server (shared by merging and change detection so they agree).
 fn server_value(
     kind: ClientTargetKind,
+    name: &str,
     config: &crate::domain::NormalizedServerConfig,
 ) -> Result<Value, MergeError> {
+    let file_spec = kind.file_spec().ok_or(MergeError::NotFileTarget)?;
     let mut server_val =
         serde_json::to_value(config).map_err(|e| MergeError::SerializationFailed(e.to_string()))?;
 
-    // Some clients (Claude) require/prefer "type": "stdio" for stdio servers
-    if config.is_stdio() && kind.file_spec().is_some_and(|file| file.adds_stdio_type) {
-        if let Some(obj) = server_val.as_object_mut() {
-            if !obj.contains_key("type") {
-                obj.insert("type".to_string(), Value::String("stdio".to_string()));
+    if let Some(obj) = server_val.as_object_mut() {
+        // Some clients (Claude) require/prefer "type": "stdio" for stdio servers
+        if config.is_stdio() && file_spec.adds_stdio_type && !obj.contains_key("type") {
+            obj.insert("type".to_string(), Value::String("stdio".to_string()));
+        } else if config.is_remote() {
+            let raw_type = config.transport_type();
+            match file_spec.remote_type.resolve_type(raw_type) {
+                Some(Some(mapped)) => {
+                    obj.insert("type".to_string(), Value::String(mapped.to_string()));
+                }
+                Some(None) => {
+                    obj.remove("type");
+                }
+                None => {
+                    return Err(MergeError::UnsupportedRemoteTransport {
+                        target: kind.cli_name(),
+                        server: name.to_string(),
+                        transport: raw_type.unwrap_or_default().to_string(),
+                    });
+                }
             }
         }
     }
@@ -84,11 +110,10 @@ pub fn classify_server_changes(
     servers
         .iter()
         .map(|(name, config)| {
+            let desired = server_value(kind, name, config)?;
             let change = match existing_servers.and_then(|m| m.get(name)) {
                 None => ServerChange::New,
-                Some(existing) if *existing == server_value(kind, config)? => {
-                    ServerChange::Unchanged
-                }
+                Some(existing) if *existing == desired => ServerChange::Unchanged,
                 Some(_) => ServerChange::Updated,
             };
             Ok((name.clone(), change))
@@ -130,7 +155,7 @@ pub fn merge_mcp_servers(
 
     // 3. Upsert each server
     for (name, config) in servers {
-        servers_container.insert(name.clone(), server_value(kind, config)?);
+        servers_container.insert(name.clone(), server_value(kind, name, config)?);
     }
 
     // 4. Serialize with pretty printing (2 spaces)
@@ -476,5 +501,131 @@ mod tests {
             classify_server_changes(ClientTargetKind::Claude, Some(&merged), &servers).unwrap();
         assert_eq!(changes["cloudflare-api"], ServerChange::Unchanged);
         assert_eq!(changes["plain"], ServerChange::Unchanged);
+    }
+
+    #[test]
+    fn test_merge_remote_server_maps_http_type_per_target() {
+        let cases = [
+            // (kind, servers_key, input_type, expected_type)
+            (
+                ClientTargetKind::Cline,
+                "mcpServers",
+                Some("http"),
+                Some("streamableHttp"),
+            ),
+            (
+                ClientTargetKind::Cline,
+                "mcpServers",
+                Some("streamable-http"),
+                Some("streamableHttp"),
+            ),
+            (
+                ClientTargetKind::Cline,
+                "mcpServers",
+                None,
+                Some("streamableHttp"),
+            ),
+            (
+                ClientTargetKind::Cline,
+                "mcpServers",
+                Some("sse"),
+                Some("sse"),
+            ),
+            (
+                ClientTargetKind::RooCode,
+                "mcpServers",
+                Some("http"),
+                Some("streamable-http"),
+            ),
+            (
+                ClientTargetKind::RooCode,
+                "mcpServers",
+                Some("streamableHttp"),
+                Some("streamable-http"),
+            ),
+            (
+                ClientTargetKind::RooCode,
+                "mcpServers",
+                None,
+                Some("streamable-http"),
+            ),
+            (
+                ClientTargetKind::RooCode,
+                "mcpServers",
+                Some("sse"),
+                Some("sse"),
+            ),
+            (
+                ClientTargetKind::Claude,
+                "mcpServers",
+                Some("streamableHttp"),
+                Some("http"),
+            ),
+            (
+                ClientTargetKind::Cursor,
+                "mcpServers",
+                Some("streamable-http"),
+                Some("http"),
+            ),
+            (ClientTargetKind::Cursor, "mcpServers", None, None),
+            (
+                ClientTargetKind::VsCode,
+                "github.copilot.chat.mcp",
+                Some("HTTP"),
+                Some("http"),
+            ),
+            (ClientTargetKind::Zed, "context_servers", None, None),
+        ];
+
+        for (kind, key, input_type, expected_type) in cases {
+            let mut srv = NormalizedServerConfig::remote("https://mcp.cloudflare.com/mcp");
+            if let Some(t) = input_type {
+                srv = srv.with_transport_type(t);
+            }
+            let servers = McpServersMap::from([("cloudflare-api".to_string(), srv)]);
+
+            let merged = merge_mcp_servers(kind, None, &servers).unwrap();
+            let val: Value = serde_json::from_str(&merged).unwrap();
+            let actual_type = val[key]["cloudflare-api"]
+                .get("type")
+                .and_then(Value::as_str);
+            assert_eq!(actual_type, expected_type, "{kind:?} input={input_type:?}");
+
+            // マージ後の設定は変更分類でも Unchanged と一致する
+            let changes = classify_server_changes(kind, Some(&merged), &servers).unwrap();
+            assert_eq!(
+                changes["cloudflare-api"],
+                ServerChange::Unchanged,
+                "{kind:?} input={input_type:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_merge_rejects_unsupported_remote_transport_type() {
+        let srv = NormalizedServerConfig::remote("wss://example.com/mcp")
+            .with_transport_type("websocket");
+        let servers = McpServersMap::from([("ws".to_string(), srv)]);
+
+        let err = merge_mcp_servers(ClientTargetKind::Cline, None, &servers).unwrap_err();
+        assert_eq!(
+            err,
+            MergeError::UnsupportedRemoteTransport {
+                target: "cline",
+                server: "ws".to_string(),
+                transport: "websocket".to_string(),
+            }
+        );
+
+        let err_classify =
+            classify_server_changes(ClientTargetKind::Claude, Some("{}"), &servers).unwrap_err();
+        assert_eq!(
+            err_classify,
+            MergeError::UnsupportedRemoteTransport {
+                target: "claude",
+                server: "ws".to_string(),
+                transport: "websocket".to_string(),
+            }
+        );
     }
 }

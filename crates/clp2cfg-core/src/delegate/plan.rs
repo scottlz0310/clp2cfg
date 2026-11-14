@@ -4,7 +4,7 @@
 use crate::delegate::CliError;
 use crate::domain::{
     CliSpec, ClientTargetKind, McpServersMap, NormalizedServerConfig, RemoteCliStyle,
-    ServerTransport,
+    RemoteTransportKind, ServerTransport,
 };
 
 /// A single subprocess invocation of a client's official CLI.
@@ -232,10 +232,10 @@ fn resolve_remote_transport(
     server: &str,
     transport_type: Option<&str>,
 ) -> Result<&'static str, CliError> {
-    match transport_type.map(str::to_ascii_lowercase).as_deref() {
-        None | Some("http" | "streamable-http" | "streamablehttp") => Ok("http"),
-        Some("sse") => Ok("sse"),
-        Some(_) => Err(CliError::UnsupportedServer {
+    match RemoteTransportKind::parse(transport_type) {
+        Some(RemoteTransportKind::Http { .. }) => Ok("http"),
+        Some(RemoteTransportKind::Sse) => Ok("sse"),
+        None => Err(CliError::UnsupportedServer {
             program: spec.program.to_string(),
             server: server.to_string(),
             reason: "this transport type".to_string(),

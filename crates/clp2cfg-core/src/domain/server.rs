@@ -24,6 +24,34 @@ pub enum ServerTransport {
     },
 }
 
+/// Normalized classification of a remote server's `type` field.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RemoteTransportKind {
+    /// Streamable HTTP / generic HTTP (`None`, `"http"`, `"streamable-http"`, `"streamableHttp"`).
+    Http { explicit: bool },
+    /// Server-Sent Events (`"sse"`).
+    Sse,
+}
+
+impl RemoteTransportKind {
+    /// Classify a raw optional remote `type` string (case-insensitive), returning `None` if unsupported.
+    pub fn parse(transport_type: Option<&str>) -> Option<Self> {
+        let Some(raw) = transport_type else {
+            return Some(Self::Http { explicit: false });
+        };
+        if raw.eq_ignore_ascii_case("http")
+            || raw.eq_ignore_ascii_case("streamable-http")
+            || raw.eq_ignore_ascii_case("streamablehttp")
+        {
+            Some(Self::Http { explicit: true })
+        } else if raw.eq_ignore_ascii_case("sse") {
+            Some(Self::Sse)
+        } else {
+            None
+        }
+    }
+}
+
 /// Normalized representation of an MCP server configuration.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NormalizedServerConfig {

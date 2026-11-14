@@ -1,5 +1,6 @@
 //! Client target kinds, what differs between clients (as data), and where their configuration lives.
 
+use super::server::RemoteTransportKind;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -53,6 +54,31 @@ pub enum ApplySpec {
     Cli(CliSpec),
 }
 
+/// How a file target formats the `type` field of remote HTTP/SSE servers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RemoteFileTypeStyle {
+    /// Standard targets (`"http"` / `"sse"`): keep omitted `type` omitted, and normalize HTTP
+    /// aliases (`streamable-http`, `streamableHttp`) to `"http"`.
+    HttpOrOmit,
+    /// Targets requiring an explicit client-specific HTTP type (e.g. `"streamableHttp"` for Cline,
+    /// `"streamable-http"` for Roo Code): both omitted `type` and HTTP aliases map to `http_type`.
+    ExplicitHttp { http_type: &'static str },
+}
+
+impl RemoteFileTypeStyle {
+    /// Resolve the JSON `"type"` value to emit for a remote server, or `None` if the transport is
+    /// unsupported. Inner `None` means omit the `"type"` field.
+    pub fn resolve_type(self, transport_type: Option<&str>) -> Option<Option<&'static str>> {
+        match RemoteTransportKind::parse(transport_type)? {
+            RemoteTransportKind::Sse => Some(Some("sse")),
+            RemoteTransportKind::Http { explicit } => match self {
+                Self::HttpOrOmit => Some(explicit.then_some("http")),
+                Self::ExplicitHttp { http_type } => Some(Some(http_type)),
+            },
+        }
+    }
+}
+
 /// A client whose config file is merged directly.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FileSpec {
@@ -62,6 +88,8 @@ pub struct FileSpec {
     pub allows_jsonc: bool,
     /// Each server gets `"type": "stdio"` when it has no `type`.
     pub adds_stdio_type: bool,
+    /// How remote HTTP/SSE `type` values are formatted in this file target.
+    pub remote_type: RemoteFileTypeStyle,
 }
 
 /// How a CLI registers remote HTTP/SSE servers (`<program> mcp add ...`).
@@ -104,6 +132,7 @@ const MCP_SERVERS_FILE: FileSpec = FileSpec {
     servers_key: "mcpServers",
     allows_jsonc: false,
     adds_stdio_type: false,
+    remote_type: RemoteFileTypeStyle::HttpOrOmit,
 };
 
 const DEFAULT_CLI: CliSpec = CliSpec {
@@ -159,13 +188,23 @@ static WINDSURF: ClientSpec = ClientSpec {
 static CLINE: ClientSpec = ClientSpec {
     cli_name: "cline",
     display_name: "Cline (VS Code)",
-    apply: ApplySpec::File(MCP_SERVERS_FILE),
+    apply: ApplySpec::File(FileSpec {
+        remote_type: RemoteFileTypeStyle::ExplicitHttp {
+            http_type: "streamableHttp",
+        },
+        ..MCP_SERVERS_FILE
+    }),
 };
 
 static ROO_CODE: ClientSpec = ClientSpec {
     cli_name: "roo-code",
     display_name: "Roo Code (VS Code)",
-    apply: ApplySpec::File(MCP_SERVERS_FILE),
+    apply: ApplySpec::File(FileSpec {
+        remote_type: RemoteFileTypeStyle::ExplicitHttp {
+            http_type: "streamable-http",
+        },
+        ..MCP_SERVERS_FILE
+    }),
 };
 
 static ZED: ClientSpec = ClientSpec {
@@ -479,6 +518,23 @@ mod tests {
                     assert_eq!(kind.file_spec(), Some(file), "{kind:?}");
                     assert_eq!(kind.cli_spec(), None, "{kind:?}");
                     assert_eq!(kind.cli_program(), None, "{kind:?}");
+                    assert!(
+                        matches!(file.remote_type.resolve_type(Some("http")), Some(Some(_))),
+                        "{kind:?}"
+                    );
+                    assert_eq!(
+                        file.remote_type.resolve_type(Some("sse")),
+                        Some(Some("sse")),
+                        "{kind:?}"
+                    );
+                    if let RemoteFileTypeStyle::ExplicitHttp { http_type } = file.remote_type {
+                        assert!(!http_type.is_empty(), "{kind:?}");
+                        assert_eq!(
+                            file.remote_type.resolve_type(None),
+                            Some(Some(http_type)),
+                            "{kind:?}"
+                        );
+                    }
                 }
                 ApplySpec::Cli(cli) => {
                     assert!(!cli.program.is_empty(), "{kind:?}");
