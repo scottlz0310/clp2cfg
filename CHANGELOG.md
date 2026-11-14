@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `bunfig.toml` に `minimumReleaseAge = 259200`（3 日）を、`.cargo/config.toml` に `registry.global-min-publish-age = "3 days"`（Rust 1.100 以降で有効）を追加。公開から 3 日未満の版・クレートを新規に解決しない。lock file maintenance は Renovate の minimumReleaseAge を迂回するため、無人の自動マージに対する防御としてパッケージマネージャ側で止める
 
+### Fixed
+
+- `type: "http"` や `url` / `serverUrl` を持つリモート MCP サーバー定義（HTTP / SSE / Streamable HTTP）を登録しようとすると `missing field command` でパースエラーになる問題を修正。名前なし単一サーバー定義の URL ホスト名からのサーバー名推論、ファイルターゲットへのマージ（Claude でリモートサーバーに `"type": "stdio"` を付与しない制御）、公式 CLI 委譲（`claude` / `copilot` / `agy` / `codex` の各構文と、非対応の `headers` / `sse` に対するターゲット別エラー）、`headers` のプレースホルダー入力・`--dry-run` / CLI エラー時のマスクにも対応
+
 ## [0.3.0] - 2026-10-31
 
 ### Changed

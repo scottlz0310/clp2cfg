@@ -1,4 +1,4 @@
-//! Detection and filling of unfilled placeholder values (e.g. `YOUR_API_KEY`) in server `env`.
+//! Detection and filling of unfilled placeholder values (e.g. `YOUR_API_KEY`) in server `env` or `headers`.
 
 use crate::domain::McpServersMap;
 use std::collections::BTreeMap;
@@ -40,13 +40,17 @@ pub fn is_placeholder(value: &str) -> bool {
     // `-` と空白を `_` に揃え、`your-api-key` / `YOUR API KEY` / `YOUR_API_KEY` を同一に扱う
     let normalized = trimmed.to_ascii_lowercase().replace(['-', ' '], "_");
 
-    normalized.starts_with("your_")
+    (normalized.starts_with("your_") || normalized.contains("_your_"))
         || has_angle_placeholder(&normalized)
         || MARKERS.iter().any(|m| normalized.contains(m))
         || LEADING_WORDS
             .iter()
             .any(|w| starts_with_word(&normalized, w))
         || is_mask(&normalized)
+        || trimmed
+            .split_whitespace()
+            .last()
+            .is_some_and(|w| is_mask(&w.to_ascii_lowercase()))
 }
 
 /// `<token>` / `Bearer <your-key>` のように、英字で始まる `<...>` を含む。
@@ -70,13 +74,13 @@ fn is_mask(value: &str) -> bool {
     value.len() >= 3 && value.chars().all(|c| c == 'x' || c == '*')
 }
 
-/// All `env` entries whose current value looks like an unfilled placeholder.
+/// All `env` or `headers` entries whose current value looks like an unfilled placeholder.
 pub fn find_placeholders(servers: &McpServersMap) -> Vec<EnvRef> {
     servers
         .iter()
         .flat_map(|(server, config)| {
             config
-                .env
+                .secret_fields()
                 .iter()
                 .filter(|(_, value)| is_placeholder(value))
                 .map(move |(key, _)| EnvRef {
@@ -98,7 +102,7 @@ pub fn fill_placeholders(servers: &mut McpServersMap, refs: &[EnvRef], overrides
         };
         if let Some(slot) = servers
             .get_mut(&env_ref.server)
-            .and_then(|config| config.env.get_mut(&env_ref.key))
+            .and_then(|config| config.secret_fields_mut().get_mut(&env_ref.key))
         {
             slot.clone_from(value);
         }
@@ -125,6 +129,8 @@ mod tests {
             ("<token>", true),
             ("<YOUR_API_KEY>", true),
             ("Bearer <your-key>", true),
+            ("Bearer YOUR_API_KEY", true),
+            ("Bearer ********", true),
             // マーカー語
             ("PASTE_HERE", true),
             ("paste here", true),
@@ -161,7 +167,7 @@ mod tests {
             .iter()
             .map(|(name, env)| {
                 let mut config = NormalizedServerConfig::new("npx");
-                config.env = env
+                *config.secret_fields_mut() = env
                     .iter()
                     .map(|(k, v)| (k.to_string(), v.to_string()))
                     .collect();
@@ -231,9 +237,37 @@ mod tests {
             let mut map = base.clone();
             fill_placeholders(&mut map, &refs, &overrides);
 
-            let env = &map["a"].env;
+            let env = map["a"].env().unwrap();
             let actual = [&env["API_KEY"], &env["OTHER"], &env["REAL"]];
             assert_eq!(actual, expected, "entries={entries:?}");
         }
+    }
+
+    #[test]
+    fn test_find_and_fill_remote_header_placeholders() {
+        let mut remote =
+            NormalizedServerConfig::remote("https://example.com/mcp").with_transport_type("http");
+        remote
+            .headers_mut()
+            .unwrap()
+            .insert("Authorization".into(), "Bearer YOUR_API_KEY".into());
+        remote
+            .headers_mut()
+            .unwrap()
+            .insert("X-Mode".into(), "prod".into());
+
+        let mut map = McpServersMap::from([("api".to_string(), remote)]);
+        let refs = find_placeholders(&map);
+        assert_eq!(refs, vec![env_ref("api", "Authorization")]);
+
+        let overrides = EnvOverrides::from([(
+            env_ref("api", "Authorization"),
+            "Bearer real-secret-token".to_string(),
+        )]);
+        fill_placeholders(&mut map, &refs, &overrides);
+        assert_eq!(
+            map["api"].headers().unwrap()["Authorization"],
+            "Bearer real-secret-token"
+        );
     }
 }

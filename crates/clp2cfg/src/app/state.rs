@@ -353,7 +353,7 @@ impl AppState {
         self.env_overrides.get(field).cloned().unwrap_or_default()
     }
 
-    /// 現在の設定（入力済みの実値を反映後）でもプレースホルダーのままの env の件数
+    /// 現在の設定（入力済みの実値を反映後）でもプレースホルダーのままの env / headers の件数
     pub fn unresolved_placeholder_count(&self) -> usize {
         let Ok(servers) = &self.parsed_config else {
             return 0;
@@ -363,7 +363,7 @@ impl AppState {
             .filter(|r| {
                 servers
                     .get(&r.server)
-                    .and_then(|c| c.env.get(&r.key))
+                    .and_then(|c| c.secret_fields().get(&r.key))
                     .is_some_and(|v| is_placeholder(v))
             })
             .count()
@@ -591,7 +591,7 @@ mod tests {
         assert_eq!(servers.len(), 1);
         let fetch = servers.get("fetch").unwrap();
         // npx -> bunx フィルタが適用されていること
-        assert_eq!(fetch.command, "bunx");
+        assert_eq!(fetch.command(), Some("bunx"));
 
         // プレビューが生成されていること
         assert!(app.target_entries[0].diff_preview.is_some());
@@ -848,8 +848,9 @@ mod tests {
             server: "gh".to_string(),
             key: "GITHUB_TOKEN".to_string(),
         };
-        let token_value =
-            |app: &AppState| app.parsed_config.as_ref().unwrap()["gh"].env["GITHUB_TOKEN"].clone();
+        let token_value = |app: &AppState| {
+            app.parsed_config.as_ref().unwrap()["gh"].env().unwrap()["GITHUB_TOKEN"].clone()
+        };
 
         let mut app = new_state(Vec::new());
         app.raw_input = SNIPPET.to_string();
@@ -894,7 +895,7 @@ mod tests {
 
         assert!(app.placeholder_fields.is_empty());
         assert_eq!(
-            app.parsed_config.as_ref().unwrap()["gh"].env["T"],
+            app.parsed_config.as_ref().unwrap()["gh"].env().unwrap()["T"],
             "real-value"
         );
     }
@@ -994,14 +995,14 @@ mod tests {
         app.raw_input = SNIPPET.to_string();
         app.reparse();
         let config = &app.parsed_config.as_ref().unwrap()["git"];
-        assert_eq!(config.command, "uvx");
-        assert_eq!(config.args, ["mcp-server-git", "--repository", "/r"]);
+        assert_eq!(config.command(), Some("uvx"));
+        assert_eq!(config.args(), ["mcp-server-git", "--repository", "/r"]);
 
         app.replace_pipx_with_uvx = false;
         app.reparse();
         let config = &app.parsed_config.as_ref().unwrap()["git"];
-        assert_eq!(config.command, "pipx");
-        assert_eq!(config.args[0], "run");
+        assert_eq!(config.command(), Some("pipx"));
+        assert_eq!(config.args()[0], "run");
     }
 
     #[test]
@@ -1250,11 +1251,13 @@ mod tests {
 
         let servers = app.parsed_config.as_ref().unwrap();
         assert_eq!(
-            servers["srv"].command, "npx",
+            servers["srv"].command(),
+            Some("npx"),
             "--no-npx-to-bunx が反映される"
         );
         assert_eq!(
-            servers["py"].command, "pipx",
+            servers["py"].command(),
+            Some("pipx"),
             "--no-pipx-to-uvx が反映される"
         );
         assert!(!app.replace_npx_with_bunx && !app.replace_pipx_with_uvx);
@@ -1360,7 +1363,12 @@ mod tests {
 
         state.update(UiAction::ReadClipboard);
         assert!(state.can_apply());
-        let command = |state: &AppState| state.parsed_config.as_ref().unwrap()["s"].command.clone();
+        let command = |state: &AppState| {
+            state.parsed_config.as_ref().unwrap()["s"]
+                .command()
+                .unwrap()
+                .to_string()
+        };
         assert_eq!(command(&state), "bunx");
         state.update(UiAction::SetReplaceNpxWithBunx(false));
         assert_eq!(command(&state), "npx");
@@ -1454,5 +1462,58 @@ mod tests {
         let startup = StartupOptions::default();
         assert!(startup.initial_input.is_none());
         assert!(startup.replace_npx_with_bunx && startup.replace_pipx_with_uvx);
+    }
+
+    #[test]
+    fn test_remote_mcp_snippet_and_header_placeholders() {
+        let temp = tempdir().unwrap();
+        let claude = make_test_target(temp.path(), ClientTargetKind::Claude, "claude.json");
+        let codex = ClientTarget::new_cli(ClientTargetKind::CodexCli, Some("codex".into()));
+        let claude_cli = ClientTarget::new_cli(ClientTargetKind::ClaudeCli, Some("claude".into()));
+        let mut app = new_state(vec![claude, codex, claude_cli]);
+
+        app.raw_input = r#"{
+            "mcpServers": {
+                "cloudflare-api": {
+                    "type": "http",
+                    "url": "https://mcp.cloudflare.com/mcp",
+                    "headers": {
+                        "Authorization": "Bearer YOUR_API_KEY"
+                    }
+                }
+            }
+        }"#
+        .to_string();
+        app.reparse();
+
+        assert!(app.parsed_config.is_ok());
+        assert_eq!(app.placeholder_fields().len(), 1);
+        assert_eq!(app.unresolved_placeholder_count(), 1);
+
+        let field = app.placeholder_fields()[0].clone();
+        app.update(UiAction::SetPlaceholder {
+            field,
+            value: "Bearer real-token".to_string(),
+        });
+        assert_eq!(app.unresolved_placeholder_count(), 0);
+
+        // Claude ファイルには type: "http" のまま出力される（"stdio" を付与しない）
+        let claude_preview = app.target_entries[0].diff_preview.as_ref().unwrap();
+        assert!(
+            claude_preview.contains(r#""type": "http""#),
+            "{claude_preview}"
+        );
+        assert!(
+            claude_preview.contains("Bearer real-token"),
+            "{claude_preview}"
+        );
+
+        // Codex CLI は headers 非対応のため対象ターゲットのみエラー表示
+        assert!(app.target_entries[1].error.is_some());
+        assert!(app.target_entries[1].diff_preview.is_none());
+
+        // Claude CLI は -H 付きコマンドをプレビューする
+        let cli_preview = app.target_entries[2].diff_preview.as_ref().unwrap();
+        assert!(cli_preview.contains("--transport http cloudflare-api https://mcp.cloudflare.com/mcp -H 'Authorization: Bearer real-token'"), "{cli_preview}");
     }
 }

@@ -1,4 +1,5 @@
 use crate::app::{AppState, UiAction};
+use clp2cfg_core::domain::ServerTransport;
 
 /// 左ペイン: 入力スニペット、プレースホルダーの実値入力、パース結果
 pub fn input_pane(ui: &mut egui::Ui, state: &AppState) -> Vec<UiAction> {
@@ -105,16 +106,34 @@ fn parsed_servers(ui: &mut egui::Ui, state: &AppState) {
                 .id_salt("parsed_servers")
                 .show(ui, |ui| {
                     for (name, config) in servers {
-                        ui.group(|ui| {
-                            ui.horizontal(|ui| {
-                                ui.strong(name);
-                                ui.monospace(&config.command);
-                            });
-                            if !config.args.is_empty() {
-                                ui.label(format!("引数: {}", config.args.join(" ")));
+                        ui.group(|ui| match &config.transport {
+                            ServerTransport::Stdio { command, args, env } => {
+                                ui.horizontal(|ui| {
+                                    ui.strong(name);
+                                    ui.monospace(command);
+                                });
+                                if !args.is_empty() {
+                                    ui.label(format!("引数: {}", args.join(" ")));
+                                }
+                                if !env.is_empty() {
+                                    ui.label(format!("環境変数: {} 件", env.len()));
+                                }
                             }
-                            if !config.env.is_empty() {
-                                ui.label(format!("環境変数: {} 件", config.env.len()));
+                            ServerTransport::Remote {
+                                transport_type,
+                                url,
+                                headers,
+                            } => {
+                                ui.horizontal(|ui| {
+                                    ui.strong(name);
+                                    if let Some(t) = transport_type {
+                                        ui.label(format!("[{t}]"));
+                                    }
+                                    ui.monospace(url);
+                                });
+                                if !headers.is_empty() {
+                                    ui.label(format!("ヘッダー: {} 件", headers.len()));
+                                }
                             }
                         });
                     }

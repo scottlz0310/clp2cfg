@@ -1,6 +1,6 @@
 //! Loose JSON parser for MCP server snippets.
 
-use crate::domain::{McpServersMap, NormalizedServerConfig};
+use crate::domain::{McpServersMap, NormalizedServerConfig, ServerTransport};
 use serde_json::Value;
 use thiserror::Error;
 
@@ -76,17 +76,19 @@ fn describe_json5_error(e: &json5::Error) -> String {
     }
 }
 
-/// serde のデータエラーは入力値（`invalid type: integer `123``）を含むため、値を含まない説明に置き換える。
-/// 欠落フィールド名（構造体側の固定名）だけは、そのまま伝える。
+/// serde のデータエラーは入力値を含まない固定文言にする。
 fn describe_config_error(e: &serde_json::Error) -> String {
     let message = e.to_string();
-    match message.strip_prefix("missing field ") {
-        Some(rest) => format!(
-            "missing field {}",
-            rest.split(" at line ").next().unwrap_or(rest)
-        ),
-        None => "invalid field type (command must be a string, args an array of strings, env a map of strings)"
-            .to_string(),
+    // `NormalizedServerConfig::deserialize` のカスタムエラーは ` at line ...` 等が付かないためそのまま使える。
+    // 念のため、既知の固定メッセージ接頭辞以外は汎用メッセージに丸めて秘密値の露出を防ぐ。
+    if message.starts_with("missing field ")
+        || message.starts_with("invalid field type ")
+        || message.starts_with("conflicting fields:")
+        || message == "server config must be an object"
+    {
+        message
+    } else {
+        "invalid server configuration".to_string()
     }
 }
 
@@ -111,8 +113,8 @@ fn normalize_parsed_value(value: Value) -> Result<McpServersMap, ParseError> {
         return parse_servers_object(servers);
     }
 
-    // Case 3: Single server definition with "command" at top-level
-    if obj.contains_key("command") {
+    // Case 3: Single server definition at top-level ("command" or "url" / "serverUrl")
+    if is_single_server_object(&obj) {
         let config: NormalizedServerConfig =
             serde_json::from_value(Value::Object(obj)).map_err(|e| {
                 ParseError::InvalidFormat(format!(
@@ -128,6 +130,12 @@ fn normalize_parsed_value(value: Value) -> Result<McpServersMap, ParseError> {
 
     // Case 4: Map of server names to server definitions
     parse_servers_object(&Value::Object(obj))
+}
+
+fn is_single_server_object(obj: &serde_json::Map<String, Value>) -> bool {
+    ["command", "url", "serverUrl"]
+        .iter()
+        .any(|key| obj.get(*key).is_some_and(|v| !v.is_object()))
 }
 
 /// Parses an object whose values are individual server definitions.
@@ -163,10 +171,15 @@ fn parse_servers_object(val: &Value) -> Result<McpServersMap, ParseError> {
     Ok(result)
 }
 
-/// Automatically infers a reasonable server name from a command and its arguments.
+/// Automatically infers a reasonable server name from a server configuration.
 pub fn infer_server_name(config: &NormalizedServerConfig) -> String {
-    let cmd = config.command.as_str();
+    match &config.transport {
+        ServerTransport::Stdio { command, args, .. } => infer_stdio_server_name(command, args),
+        ServerTransport::Remote { url, .. } => infer_remote_server_name(url),
+    }
+}
 
+fn infer_stdio_server_name(cmd: &str, args: &[String]) -> String {
     // Check if command is a package runner (npx, bunx, uvx, pnpm)
     let is_runner = matches!(
         cmd,
@@ -175,7 +188,7 @@ pub fn infer_server_name(config: &NormalizedServerConfig) -> String {
 
     if is_runner {
         // Look for the package name in arguments (skip flags like -y, --yes)
-        for arg in &config.args {
+        for arg in args {
             if arg.starts_with('-') {
                 continue;
             }
@@ -189,8 +202,8 @@ pub fn infer_server_name(config: &NormalizedServerConfig) -> String {
 
     if cmd == "docker" {
         // Find image name in docker run args
-        if let Some(pos) = config.args.iter().position(|a| a == "run") {
-            for arg in &config.args[pos + 1..] {
+        if let Some(pos) = args.iter().position(|a| a == "run") {
+            for arg in &args[pos + 1..] {
                 if !arg.starts_with('-') && !arg.contains('=') {
                     let image_base = extract_package_base_name(arg);
                     if !image_base.is_empty() {
@@ -212,6 +225,61 @@ pub fn infer_server_name(config: &NormalizedServerConfig) -> String {
     }
 
     "mcp-server".to_string()
+}
+
+fn infer_remote_server_name(url: &str) -> String {
+    let without_scheme = url.split_once("://").map_or(url, |(_, rest)| rest);
+    let authority = without_scheme.split(['/', '?', '#']).next().unwrap_or("");
+    let host_port = authority.rsplit_once('@').map_or(authority, |(_, h)| h);
+    let host = if host_port.starts_with('[') {
+        host_port
+            .trim_start_matches('[')
+            .split(']')
+            .next()
+            .unwrap_or("")
+    } else {
+        host_port.split(':').next().unwrap_or("")
+    };
+
+    let without_prefix = host
+        .strip_prefix("mcp.")
+        .or_else(|| host.strip_prefix("www."))
+        .filter(|rest| rest.contains('.'))
+        .unwrap_or(host);
+
+    let is_ipv4 = !without_prefix.is_empty()
+        && without_prefix
+            .chars()
+            .all(|c| c.is_ascii_digit() || c == '.');
+    let without_tld = if !is_ipv4 && !host_port.starts_with('[') {
+        match without_prefix.rsplit_once('.') {
+            Some((head, tld))
+                if !head.is_empty() && tld.chars().any(|c| c.is_ascii_alphabetic()) =>
+            {
+                head
+            }
+            _ => without_prefix,
+        }
+    } else {
+        without_prefix
+    };
+
+    let sanitized: String = without_tld
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    let trimmed = sanitized.trim_matches('-');
+    if trimmed.is_empty() {
+        "mcp-server".to_string()
+    } else {
+        trimmed.to_string()
+    }
 }
 
 /// Strips npm/docker scope prefixes and common prefixes like "mcp-server-".
@@ -275,11 +343,8 @@ mod tests {
         let parsed = parse_mcp_snippet(snippet).unwrap();
         assert_eq!(parsed.len(), 1);
         let server = parsed.get("sqlite").unwrap();
-        assert_eq!(server.command, "uvx");
-        assert_eq!(
-            server.args,
-            vec!["mcp-server-sqlite", "--db-path", "test.db"]
-        );
+        assert_eq!(server.command(), Some("uvx"));
+        assert_eq!(server.args(), ["mcp-server-sqlite", "--db-path", "test.db"]);
     }
 
     #[test]
@@ -309,7 +374,7 @@ mod tests {
         assert_eq!(parsed.len(), 1);
         let (name, server) = parsed.into_iter().next().unwrap();
         assert_eq!(name, "server-filesystem");
-        assert_eq!(server.command, "npx");
+        assert_eq!(server.command(), Some("npx"));
     }
 
     #[test]
@@ -329,7 +394,7 @@ mod tests {
         let parsed = parse_mcp_snippet(snippet).unwrap();
         assert_eq!(parsed.len(), 1);
         let server = parsed.get("memory").unwrap();
-        assert_eq!(server.command, "npx");
+        assert_eq!(server.command(), Some("npx"));
         assert_eq!(server.extra.get("type").unwrap(), "stdio");
     }
 
@@ -406,6 +471,12 @@ mod tests {
                 secret: "sk-secret-xyz",
                 hint: "line 1",
             },
+            Case {
+                name: "invalid headers value does not echo the secret",
+                input: r#"{"srv":{"type":"http","url":"https://example.com","headers":{"Authorization":99887766}}}"#,
+                secret: "99887766",
+                hint: "invalid field type",
+            },
         ];
 
         for case in cases {
@@ -413,5 +484,83 @@ mod tests {
             assert!(!err.contains(case.secret), "{}: {err}", case.name);
             assert!(err.contains(case.hint), "{}: {err}", case.name);
         }
+    }
+
+    #[test]
+    fn test_parse_remote_mcp_servers() {
+        let cases = [
+            (
+                "http with type and url",
+                r#"{"mcpServers":{"cloudflare-api":{"type":"http","url":"https://mcp.cloudflare.com/mcp"}}}"#,
+                "cloudflare-api",
+                Some("http"),
+                "https://mcp.cloudflare.com/mcp",
+            ),
+            (
+                "url only without type",
+                r#"{"cursor-remote":{"url":"https://example.com/mcp"}}"#,
+                "cursor-remote",
+                None,
+                "https://example.com/mcp",
+            ),
+            (
+                "windsurf serverUrl normalized to url",
+                r#"{"mcpServers":{"ws":{"serverUrl":"https://windsurf.example/mcp"}}}"#,
+                "ws",
+                None,
+                "https://windsurf.example/mcp",
+            ),
+            (
+                "sse with headers",
+                r#"{"mcp":{"legacy":{"type":"sse","url":"https://example.com/sse","headers":{"Authorization":"Bearer tok"}}}}"#,
+                "legacy",
+                Some("sse"),
+                "https://example.com/sse",
+            ),
+        ];
+
+        for (label, input, name, expected_type, expected_url) in cases {
+            let parsed = parse_mcp_snippet(input).unwrap_or_else(|e| panic!("{label}: {e}"));
+            assert_eq!(parsed.len(), 1, "{label}");
+            let cfg = parsed
+                .get(name)
+                .unwrap_or_else(|| panic!("{label}: missing {name}"));
+            assert!(cfg.is_remote(), "{label}");
+            assert_eq!(cfg.transport_type(), expected_type, "{label}");
+            assert_eq!(cfg.url(), Some(expected_url), "{label}");
+        }
+    }
+
+    #[test]
+    fn test_parse_single_unnamed_remote_server_infers_name() {
+        let cases = [
+            (
+                r#"{"type":"http","url":"https://mcp.cloudflare.com/mcp"}"#,
+                "cloudflare",
+            ),
+            (r#"{"url":"https://mcp.dev/mcp"}"#, "mcp"),
+            (r#"{"url":"http://localhost:3000/mcp"}"#, "localhost"),
+            (r#"{"serverUrl":"http://127.0.0.1:8080/mcp"}"#, "127-0-0-1"),
+            (
+                r#"{"url":"https://api.githubcopilot.com/mcp/"}"#,
+                "api-githubcopilot",
+            ),
+        ];
+
+        for (input, expected_name) in cases {
+            let parsed = parse_mcp_snippet(input).unwrap();
+            assert_eq!(parsed.len(), 1);
+            let (name, server) = parsed.into_iter().next().unwrap();
+            assert_eq!(name, expected_name, "input={input}");
+            assert!(server.is_remote(), "input={input}");
+        }
+    }
+
+    #[test]
+    fn test_server_named_url_in_map_is_not_mistaken_for_single_server() {
+        let input = r#"{"url":{"command":"node"}}"#;
+        let parsed = parse_mcp_snippet(input).unwrap();
+        assert!(parsed["url"].is_stdio());
+        assert_eq!(parsed["url"].command(), Some("node"));
     }
 }

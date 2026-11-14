@@ -51,13 +51,15 @@ fn run_subprocess(inv: &CliInvocation) -> Result<(), CliError> {
 mod tests {
     use super::*;
     use crate::delegate::plan::build_cli_invocations;
-    use crate::domain::{ClientTargetKind, McpServersMap, NormalizedServerConfig};
+    use crate::domain::{ClientTargetKind, McpServersMap, NormalizedServerConfig, ServerTransport};
     use std::collections::BTreeMap;
 
     fn servers() -> McpServersMap {
         let mut cfg = NormalizedServerConfig::new("npx");
-        cfg.args = vec!["-y".into(), "pkg".into()];
-        cfg.env = BTreeMap::from([("API_KEY".to_string(), "a b".to_string())]);
+        if let ServerTransport::Stdio { args, env, .. } = &mut cfg.transport {
+            *args = vec!["-y".into(), "pkg".into()];
+            *env = BTreeMap::from([("API_KEY".to_string(), "a b".to_string())]);
+        }
         McpServersMap::from([("my-srv".to_string(), cfg)])
     }
 

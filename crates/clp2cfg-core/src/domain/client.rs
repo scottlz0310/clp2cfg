@@ -64,6 +64,18 @@ pub struct FileSpec {
     pub adds_stdio_type: bool,
 }
 
+/// How a CLI registers remote HTTP/SSE servers (`<program> mcp add ...`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RemoteCliStyle {
+    /// `<transport_flag> <http|sse> ... <name> <url>` (`claude`, `copilot`, `agy`).
+    TransportAndPositionalUrl {
+        transport_flag: &'static str,
+        supports_sse: bool,
+    },
+    /// `<name> --url <url>` (`codex`).
+    UrlFlag,
+}
+
 /// A client reached through its official CLI (`<program> mcp add ...`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CliSpec {
@@ -79,6 +91,13 @@ pub struct CliSpec {
     /// The env flags go before the server name (`agy` requires it). Otherwise they go after the
     /// name: `claude`'s variadic `-e` would swallow a name that comes after it.
     pub flags_before_name: bool,
+    /// Flag that passes one `Key: Value` HTTP header, or `None` if unsupported (e.g. `codex`).
+    pub header_flag: Option<&'static str>,
+    /// Whether header flags must appear before `<name>` (`agy` requires it; `claude`'s variadic `-H`
+    /// would swallow `<name>` if placed before it).
+    pub headers_before_name: bool,
+    /// How remote HTTP/SSE servers are passed.
+    pub remote: RemoteCliStyle,
 }
 
 const MCP_SERVERS_FILE: FileSpec = FileSpec {
@@ -93,6 +112,12 @@ const DEFAULT_CLI: CliSpec = CliSpec {
     scope: None,
     env_flag: "--env",
     flags_before_name: false,
+    header_flag: Some("--header"),
+    headers_before_name: true,
+    remote: RemoteCliStyle::TransportAndPositionalUrl {
+        transport_flag: "--transport",
+        supports_sse: true,
+    },
 };
 
 static CLAUDE: ClientSpec = ClientSpec {
@@ -161,6 +186,8 @@ static CLAUDE_CLI: ClientSpec = ClientSpec {
         remove_before_add: true,
         scope: Some("user"),
         env_flag: "-e",
+        header_flag: Some("-H"),
+        headers_before_name: false,
         ..DEFAULT_CLI
     }),
 };
@@ -170,6 +197,9 @@ static CODEX_CLI: ClientSpec = ClientSpec {
     display_name: "Codex CLI",
     apply: ApplySpec::Cli(CliSpec {
         program: "codex",
+        header_flag: None,
+        headers_before_name: false,
+        remote: RemoteCliStyle::UrlFlag,
         ..DEFAULT_CLI
     }),
 };
@@ -190,6 +220,10 @@ static ANTIGRAVITY_CLI: ClientSpec = ClientSpec {
     apply: ApplySpec::Cli(CliSpec {
         program: "agy",
         flags_before_name: true,
+        remote: RemoteCliStyle::TransportAndPositionalUrl {
+            transport_flag: "--type",
+            supports_sse: false,
+        },
         ..DEFAULT_CLI
     }),
 };
@@ -449,6 +483,9 @@ mod tests {
                 ApplySpec::Cli(cli) => {
                     assert!(!cli.program.is_empty(), "{kind:?}");
                     assert!(cli.env_flag.starts_with('-'), "{kind:?}");
+                    if let Some(header_flag) = cli.header_flag {
+                        assert!(header_flag.starts_with('-'), "{kind:?}");
+                    }
                     assert_eq!(kind.action(), TargetAction::CliCommand, "{kind:?}");
                     assert_eq!(kind.cli_spec(), Some(cli), "{kind:?}");
                     assert_eq!(kind.file_spec(), None, "{kind:?}");

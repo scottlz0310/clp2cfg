@@ -48,8 +48,8 @@ fn server_value(
     let mut server_val =
         serde_json::to_value(config).map_err(|e| MergeError::SerializationFailed(e.to_string()))?;
 
-    // Some clients (Claude) require/prefer "type": "stdio"
-    if kind.file_spec().is_some_and(|file| file.adds_stdio_type) {
+    // Some clients (Claude) require/prefer "type": "stdio" for stdio servers
+    if config.is_stdio() && kind.file_spec().is_some_and(|file| file.adds_stdio_type) {
         if let Some(obj) = server_val.as_object_mut() {
             if !obj.contains_key("type") {
                 obj.insert("type".to_string(), Value::String("stdio".to_string()));
@@ -140,14 +140,16 @@ pub fn merge_mcp_servers(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::NormalizedServerConfig;
+    use crate::domain::{NormalizedServerConfig, ServerTransport};
     use std::collections::BTreeMap;
 
     fn create_dummy_server(command: &str) -> NormalizedServerConfig {
         NormalizedServerConfig {
-            command: command.to_string(),
-            args: vec!["run".to_string()],
-            env: BTreeMap::new(),
+            transport: ServerTransport::Stdio {
+                command: command.to_string(),
+                args: vec!["run".to_string()],
+                env: BTreeMap::new(),
+            },
             extra: Map::new(),
         }
     }
@@ -447,5 +449,32 @@ mod tests {
             classify_server_changes(ClientTargetKind::ClaudeCli, None, &servers),
             Err(MergeError::NotFileTarget)
         ));
+    }
+
+    #[test]
+    fn test_merge_remote_server_preserves_type_and_does_not_add_stdio_to_claude() {
+        let http_srv = NormalizedServerConfig::remote("https://mcp.cloudflare.com/mcp")
+            .with_transport_type("http");
+        let typeless_srv = NormalizedServerConfig::remote("https://example.com/mcp");
+        let servers = McpServersMap::from([
+            ("cloudflare-api".to_string(), http_srv),
+            ("plain".to_string(), typeless_srv),
+        ]);
+
+        let merged = merge_mcp_servers(ClientTargetKind::Claude, None, &servers).unwrap();
+        let val: Value = serde_json::from_str(&merged).unwrap();
+
+        assert_eq!(val["mcpServers"]["cloudflare-api"]["type"], "http");
+        assert_eq!(
+            val["mcpServers"]["cloudflare-api"]["url"],
+            "https://mcp.cloudflare.com/mcp"
+        );
+        assert!(val["mcpServers"]["plain"].get("type").is_none());
+        assert_eq!(val["mcpServers"]["plain"]["url"], "https://example.com/mcp");
+
+        let changes =
+            classify_server_changes(ClientTargetKind::Claude, Some(&merged), &servers).unwrap();
+        assert_eq!(changes["cloudflare-api"], ServerChange::Unchanged);
+        assert_eq!(changes["plain"], ServerChange::Unchanged);
     }
 }
