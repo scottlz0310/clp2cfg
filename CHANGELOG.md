@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- 名前なし単一 MCP サーバー定義（ローカルインストールした実行ファイルやパッケージ指定）からサーバー名を推論する際、先頭の `mcp-` / `mcp-server-` に加えて末尾の `-mcp` / `-mcp-server` / `-server-mcp`（および `_mcp` 等）も除去するように修正。これにより、既存の `desktop-touch` や `playwright` が登録済みの設定に対して `desktop-touch-mcp.exe` や `playwright-mcp.exe`、フルパス指定の `bunx.exe`、`@playwright/mcp@latest` などを適用しても `-mcp` 付き別名での 2 重登録にならない（#97）
+
 ## [0.3.2] - 2026-11-14
 
 ### Changed
