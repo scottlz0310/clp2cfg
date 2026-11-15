@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `crates/clp2cfg-core/src/discovery.rs` の `is_executable_file` を Unix / 非 Unix の `#[cfg]` ごとに関数分割し、Rust 1.100.0 の Clippy（`clippy::needless_bool`）で警告・失敗しないように修正（#96 対応）
+
 ## [0.3.3] - 2026-11-15
 
 ### Fixed
