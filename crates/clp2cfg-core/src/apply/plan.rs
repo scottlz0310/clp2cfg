@@ -220,4 +220,47 @@ mod tests {
             "transparent なので元のメッセージのまま"
         );
     }
+
+    #[test]
+    fn test_local_binary_snippet_updates_existing_server_without_duplicate() {
+        let existing = r#"{
+            "mcpServers": {
+                "desktop-touch": {
+                    "type": "stdio",
+                    "command": "bunx",
+                    "args": ["@harusame64/desktop-touch-mcp"]
+                }
+            }
+        }"#;
+        let io = FakeIo::default().with_file("/cfg/.claude.json", existing);
+        let target = ClientTarget::new(
+            ClientTargetKind::Claude,
+            PathBuf::from("/cfg/.claude.json"),
+            true,
+        );
+        let snippet =
+            r#"{"command":"C:\\Users\\alice\\.bun\\bin\\desktop-touch-mcp.exe","args":[]}"#;
+        let prepared = crate::snippet::pipeline::prepare(
+            snippet,
+            &crate::snippet::filter::FilterOptions::default(),
+            &crate::snippet::placeholder::EnvOverrides::new(),
+        )
+        .unwrap();
+
+        let plan = plan_target(&target, &prepared.servers, &io).unwrap();
+        let changes = plan.changes().unwrap();
+
+        assert_eq!(changes.get("desktop-touch"), Some(&ServerChange::Updated));
+        assert!(!changes.contains_key("desktop-touch-mcp"));
+        let TargetPlan::File { merged, .. } = plan else {
+            panic!("expected file plan");
+        };
+        let merged_json: serde_json::Value = serde_json::from_str(&merged).unwrap();
+        let servers_obj = merged_json["mcpServers"].as_object().unwrap();
+        assert_eq!(servers_obj.len(), 1);
+        assert_eq!(
+            servers_obj["desktop-touch"]["command"],
+            r"C:\Users\alice\.bun\bin\desktop-touch-mcp.exe"
+        );
+    }
 }

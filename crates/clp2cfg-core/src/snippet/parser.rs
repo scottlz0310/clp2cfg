@@ -180,13 +180,10 @@ pub fn infer_server_name(config: &NormalizedServerConfig) -> String {
 }
 
 fn infer_stdio_server_name(cmd: &str, args: &[String]) -> String {
-    // Check if command is a package runner (npx, bunx, uvx, pnpm)
-    let is_runner = matches!(
-        cmd,
-        "npx" | "bunx" | "uvx" | "pnpx" | "yarn" | "npx.cmd" | "bunx.cmd"
-    );
+    let cmd_stem = command_stem(cmd);
+    let runner = is_package_runner(cmd_stem);
 
-    if is_runner {
+    if runner {
         // Look for the package name in arguments (skip flags like -y, --yes)
         for arg in args {
             if arg.starts_with('-') {
@@ -200,7 +197,7 @@ fn infer_stdio_server_name(cmd: &str, args: &[String]) -> String {
         }
     }
 
-    if cmd == "docker" {
+    if cmd_stem.eq_ignore_ascii_case("docker") {
         // Find image name in docker run args
         if let Some(pos) = args.iter().position(|a| a == "run") {
             for arg in &args[pos + 1..] {
@@ -214,17 +211,27 @@ fn infer_stdio_server_name(cmd: &str, args: &[String]) -> String {
         }
     }
 
-    // Fallback to command name without extension or path
-    let cmd_name = std::path::Path::new(cmd)
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or(cmd);
-
-    if !cmd_name.is_empty() && !is_runner {
-        return cmd_name.to_string();
+    if !cmd_stem.is_empty() && !runner {
+        return strip_redundant_mcp_affixes(cmd_stem).to_string();
     }
 
     "mcp-server".to_string()
+}
+
+/// Extracts the command file stem regardless of Windows/Unix path separators.
+fn command_stem(cmd: &str) -> &str {
+    let file_name = cmd.rsplit(['/', '\\']).next().unwrap_or(cmd);
+    std::path::Path::new(file_name)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or(file_name)
+}
+
+fn is_package_runner(cmd_stem: &str) -> bool {
+    matches!(
+        cmd_stem.to_ascii_lowercase().as_str(),
+        "npx" | "bunx" | "uvx" | "pnpx" | "yarn"
+    )
 }
 
 fn infer_remote_server_name(url: &str) -> String {
@@ -282,33 +289,102 @@ fn infer_remote_server_name(url: &str) -> String {
     }
 }
 
-/// Strips npm/docker scope prefixes and common prefixes like "mcp-server-".
+/// Strips npm/docker scope prefixes and redundant "mcp" affixes (both prefix and postfix).
 fn extract_package_base_name(pkg: &str) -> String {
-    // 1. Remove npm scope (e.g., @modelcontextprotocol/server-filesystem -> server-filesystem)
-    let without_scope = if let Some(slash_idx) = pkg.rfind('/') {
-        &pkg[slash_idx + 1..]
-    } else {
-        pkg
+    // 1. Separate npm scope (e.g., @playwright/mcp -> scope="playwright", rest="mcp")
+    //    or registry/org path (e.g., ghcr.io/org/tool-mcp -> rest="tool-mcp").
+    let (npm_scope, without_scope) = match pkg.rsplit_once(['/', '\\']) {
+        Some((prefix, rest)) => {
+            let scope = prefix
+                .strip_prefix('@')
+                .filter(|s| !s.is_empty() && !s.contains(['/', '\\']));
+            (scope, rest)
+        }
+        None => (None, pkg),
     };
 
-    // 2. Remove version tag (e.g., server-filesystem@latest -> server-filesystem)
-    let without_version = if let Some(at_idx) = without_scope.find('@') {
-        &without_scope[..at_idx]
-    } else {
-        without_scope
+    // 2. Remove version or container tag (e.g., server-filesystem@latest, tool-mcp:latest)
+    let without_version = match without_scope.find('@') {
+        Some(at_idx) => &without_scope[..at_idx],
+        None => match without_scope.rsplit_once(':') {
+            // Avoid splitting Windows drive letters like "C:"
+            Some((head, _)) if head.len() > 1 => head,
+            _ => without_scope,
+        },
     };
 
-    // 3. Remove common redundant prefixes if they leave a clear name
-    let clean_name = without_version
-        .strip_prefix("mcp-server-")
-        .or_else(|| without_version.strip_prefix("mcp-"))
-        .unwrap_or(without_version);
+    // 3. Remove redundant MCP prefixes and postfixes (leaving non-empty core name)
+    let clean_name = strip_redundant_mcp_affixes(without_version);
+
+    // If the package basename itself is generic ("mcp" / "mcp-server") under an npm scope
+    // such as "@playwright/mcp@latest", prefer the normalized scope name ("playwright").
+    if is_generic_mcp_name(clean_name) {
+        if let Some(scope) = npm_scope {
+            let clean_scope = strip_redundant_mcp_affixes(scope);
+            if !clean_scope.is_empty() {
+                return clean_scope.to_string();
+            }
+        }
+    }
 
     if clean_name.is_empty() {
         without_version.to_string()
     } else {
         clean_name.to_string()
     }
+}
+
+fn is_generic_mcp_name(name: &str) -> bool {
+    matches!(
+        name.to_ascii_lowercase().as_str(),
+        "mcp" | "mcp-server" | "mcp_server" | "server-mcp" | "server_mcp"
+    )
+}
+
+/// Strips redundant `mcp-` / `mcp-server-` prefixes and `-mcp` / `-mcp-server` postfixes
+/// without reducing generic names (`mcp`, `mcp-server`) to bare `server` or an empty string.
+fn strip_redundant_mcp_affixes(name: &str) -> &str {
+    const PREFIXES: &[&str] = &["mcp-server-", "mcp_server_", "mcp-", "mcp_"];
+    const SUFFIXES: &[&str] = &[
+        "-mcp-server",
+        "_mcp_server",
+        "-server-mcp",
+        "_server_mcp",
+        "-mcp",
+        "_mcp",
+    ];
+
+    if is_generic_mcp_name(name) {
+        return name;
+    }
+
+    let mut current = name;
+    for prefix in PREFIXES {
+        if current.len() > prefix.len()
+            && current
+                .get(..prefix.len())
+                .is_some_and(|head| head.eq_ignore_ascii_case(prefix))
+        {
+            current = &current[prefix.len()..];
+            break;
+        }
+    }
+
+    if is_generic_mcp_name(current) {
+        return current;
+    }
+
+    for suffix in SUFFIXES {
+        if current.len() > suffix.len()
+            && current
+                .get(current.len() - suffix.len()..)
+                .is_some_and(|tail| tail.eq_ignore_ascii_case(suffix))
+        {
+            current = &current[..current.len() - suffix.len()];
+            break;
+        }
+    }
+    current
 }
 
 #[cfg(test)]
@@ -562,5 +638,107 @@ mod tests {
         let parsed = parse_mcp_snippet(input).unwrap();
         assert!(parsed["url"].is_stdio());
         assert_eq!(parsed["url"].command(), Some("node"));
+    }
+
+    #[test]
+    fn test_parse_single_unnamed_stdio_server_normalizes_mcp_affixes() {
+        let cases = [
+            // Local binaries with Windows / Unix paths and -mcp postfix
+            (
+                "windows local exe with -mcp postfix",
+                r#"{"command":"C:\\Users\\alice\\.bun\\bin\\desktop-touch-mcp.exe","args":[]}"#,
+                "desktop-touch",
+            ),
+            (
+                "windows local exe playwright-mcp",
+                r#"{"command":"C:\\Users\\alice\\.bun\\bin\\playwright-mcp.exe","args":[]}"#,
+                "playwright",
+            ),
+            (
+                "unix local binary with -mcp-server postfix",
+                r#"{"command":"/usr/local/bin/foo-mcp-server"}"#,
+                "foo",
+            ),
+            (
+                "local binary with -server-mcp postfix",
+                r#"{"command":"bar-server-mcp.cmd"}"#,
+                "bar",
+            ),
+            (
+                "local binary with mcp-server- prefix and uppercase MCP",
+                r#"{"command":"C:\\bin\\MCP-Server-Git.exe"}"#,
+                "Git",
+            ),
+            (
+                "local binary with underscore _mcp postfix",
+                r#"{"command":"my_tool_mcp.exe"}"#,
+                "my_tool",
+            ),
+            (
+                "both prefix and postfix affixes are stripped",
+                r#"{"command":"mcp-custom-mcp.exe"}"#,
+                "custom",
+            ),
+            // Package runners (including full Windows path to bunx.exe)
+            (
+                "full-path bunx.exe runner with scoped -mcp package",
+                r#"{"command":"C:\\Users\\alice\\.bun\\bin\\bunx.exe","args":["@harusame64/desktop-touch-mcp"]}"#,
+                "desktop-touch",
+            ),
+            (
+                "npx with scoped generic @playwright/mcp@latest",
+                r#"{"command":"npx","args":["@playwright/mcp@latest"]}"#,
+                "playwright",
+            ),
+            (
+                "npx with scoped generic @playwright/mcp-server",
+                r#"{"command":"npx","args":["@playwright/mcp-server"]}"#,
+                "playwright",
+            ),
+            (
+                "uvx with mcp-server- prefix",
+                r#"{"command":"uvx","args":["mcp-server-sqlite","--db-path","test.db"]}"#,
+                "sqlite",
+            ),
+            (
+                "docker run with image tag and -mcp postfix",
+                r#"{"command":"docker","args":["run","-i","--rm","ghcr.io/org/my-tool-mcp:latest"]}"#,
+                "my-tool",
+            ),
+            // Edge cases & non-empty guards
+            (
+                "bare mcp.exe does not reduce to empty",
+                r#"{"command":"C:\\bin\\mcp.exe"}"#,
+                "mcp",
+            ),
+            (
+                "bare mcp-server.exe does not reduce to empty",
+                r#"{"command":"mcp-server.exe"}"#,
+                "mcp-server",
+            ),
+            (
+                "existing server- prefix without mcp is preserved",
+                r#"{"command":"npx","args":["-y","@modelcontextprotocol/server-filesystem"]}"#,
+                "server-filesystem",
+            ),
+            (
+                "non-ascii prefix/name with -mcp postfix does not panic on char boundaries",
+                r#"{"command":"C:\\tools\\日本語-mcp.exe"}"#,
+                "日本語",
+            ),
+            (
+                "non-ascii name without hyphen separator is safe on char boundaries",
+                r#"{"command":"あmcp"}"#,
+                "あmcp",
+            ),
+        ];
+
+        for (label, input, expected_name) in cases {
+            let parsed = parse_mcp_snippet(input).unwrap_or_else(|e| panic!("{label}: {e}"));
+            assert_eq!(parsed.len(), 1, "{label}");
+            let (name, server) = parsed.into_iter().next().unwrap();
+            assert_eq!(name, expected_name, "{label}: input={input}");
+            assert!(server.is_stdio(), "{label}");
+        }
     }
 }
