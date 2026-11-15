@@ -147,21 +147,20 @@ fn find_in_dirs(program: &str, dirs: impl Iterator<Item = PathBuf>) -> Option<Pa
     None
 }
 
+#[cfg(unix)]
 fn is_executable_file(path: &Path) -> bool {
-    if !path.is_file() {
-        return false;
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        path.metadata()
+    use std::os::unix::fs::PermissionsExt;
+
+    path.is_file()
+        && path
+            .metadata()
             .map(|m| m.permissions().mode() & 0o111 != 0)
             .unwrap_or(false)
-    }
-    #[cfg(not(unix))]
-    {
-        true
-    }
+}
+
+#[cfg(not(unix))]
+fn is_executable_file(path: &Path) -> bool {
+    path.is_file()
 }
 
 #[cfg(test)]
