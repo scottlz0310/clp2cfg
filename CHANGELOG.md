@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.3] - 2026-11-15
+
 ### Fixed
 
 - 名前なし単一 MCP サーバー定義（ローカルインストールした実行ファイルやパッケージ指定）からサーバー名を推論する際、先頭の `mcp-` / `mcp-server-` に加えて末尾の `-mcp` / `-mcp-server` / `-server-mcp`（および `_mcp` 等）も除去するように修正。これにより、既存の `desktop-touch` や `playwright` が登録済みの設定に対して `desktop-touch-mcp.exe` や `playwright-mcp.exe`、フルパス指定の `bunx.exe`、`@playwright/mcp@latest` などを適用しても `-mcp` 付き別名での 2 重登録にならない（#97）
@@ -159,7 +161,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `Cargo.toml` の `[dev-dependencies]` から重複していた `tempfile` を削除
 
-[Unreleased]: https://github.com/scottlz0310/clp2cfg/compare/v0.3.2...HEAD
+[Unreleased]: https://github.com/scottlz0310/clp2cfg/compare/v0.3.3...HEAD
+[0.3.3]: https://github.com/scottlz0310/clp2cfg/compare/v0.3.2...v0.3.3
 [0.3.2]: https://github.com/scottlz0310/clp2cfg/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/scottlz0310/clp2cfg/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/scottlz0310/clp2cfg/compare/v0.2.0...v0.3.0
