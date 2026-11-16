@@ -79,9 +79,23 @@ impl CliInvocation {
         if rules.is_empty() || text.is_empty() {
             return text.to_string();
         }
-        let mut redacted = text.to_string();
-        for (target, replacement) in rules {
-            redacted = redacted.replace(&target, &replacement);
+        // Single-pass left-to-right longest match so already-redacted `***` spans are never
+        // re-matched and real secrets containing `***` are still redacted safely.
+        let mut redacted = String::with_capacity(text.len());
+        let mut pos = 0;
+        while pos < text.len() {
+            let rest = &text[pos..];
+            if let Some((target, replacement)) =
+                rules.iter().find(|(target, _)| rest.starts_with(target))
+            {
+                redacted.push_str(replacement);
+                pos += target.len();
+            } else if let Some(ch) = rest.chars().next() {
+                redacted.push(ch);
+                pos += ch.len_utf8();
+            } else {
+                break;
+            }
         }
         redacted
     }
@@ -114,8 +128,8 @@ impl CliInvocation {
         for (arg, kind) in self.arg_entries() {
             collect_secret_rules(kind, arg, &mut rules);
         }
-        // Replace longer targets first so partial overlaps never leave secret suffixes behind.
-        rules.retain(|(target, _)| !target.is_empty() && !target.contains("***"));
+        // Sort longest-first so longest match wins at each byte offset.
+        rules.retain(|(target, _)| !target.is_empty());
         rules.sort_by(|a, b| b.0.len().cmp(&a.0.len()).then_with(|| a.0.cmp(&b.0)));
         rules.dedup_by(|a, b| a.0 == b.0);
         rules
@@ -484,6 +498,10 @@ mod tests {
                 "EMPTY=".into(),
                 "-H".into(),
                 "Authorization: Bearer bearer-token-999".into(),
+                "-e".into(),
+                "ASTERISK_KEY=alpha***omega".into(),
+                "-H".into(),
+                "X-Api-Key: Bearer beta***gamma".into(),
                 "--".into(),
                 "node".into(),
                 "ARG=post-double-dash-ok".into(),
@@ -511,6 +529,16 @@ mod tests {
                 "header full pair, header value, and bearer credential",
                 "rejected Authorization: Bearer bearer-token-999 (token bearer-token-999)",
                 "rejected Authorization: *** (token ***)",
+            ),
+            (
+                "env secret containing *** is redacted in pair and standalone forms",
+                "error: ASTERISK_KEY=alpha***omega (alpha***omega)",
+                "error: ASTERISK_KEY=*** (***)",
+            ),
+            (
+                "header secret containing *** is redacted in pair, value, and credential forms",
+                "error: X-Api-Key: Bearer beta***gamma (Bearer beta***gamma / beta***gamma)",
+                "error: X-Api-Key: *** (*** / ***)",
             ),
             (
                 "post-double-dash args are not treated as secrets",

@@ -145,8 +145,12 @@ mod tests {
                 "add".into(),
                 "-e".into(),
                 "API_KEY=super-secret-env".into(),
+                "-e".into(),
+                "STAR_KEY=alpha***omega".into(),
                 "-H".into(),
                 "Authorization: Bearer super-secret-token".into(),
+                "-H".into(),
+                "X-Star: Bearer beta***gamma".into(),
             ],
             false,
         );
@@ -159,6 +163,12 @@ mod tests {
                 &["super-secret-env"][..],
             ),
             (
+                "env value containing *** leaked in stderr",
+                b"error: STAR_KEY=alpha***omega (alpha***omega)".as_slice(),
+                "STAR_KEY=*** (***)",
+                &["alpha***omega"][..],
+            ),
+            (
                 "header bearer token leaked in stderr",
                 b"http 401 for Authorization: Bearer super-secret-token (super-secret-token)"
                     .as_slice(),
@@ -166,10 +176,21 @@ mod tests {
                 &["super-secret-token"][..],
             ),
             (
+                "header bearer token containing *** leaked in stderr",
+                b"http 401 for X-Star: Bearer beta***gamma (beta***gamma)".as_slice(),
+                "X-Star: *** (***)",
+                &["beta***gamma"][..],
+            ),
+            (
                 "empty stderr falls back to status text",
                 b"   \n".as_slice(),
                 "exit status: 1",
-                &["super-secret-env", "super-secret-token"][..],
+                &[
+                    "super-secret-env",
+                    "super-secret-token",
+                    "alpha***omega",
+                    "beta***gamma",
+                ][..],
             ),
         ];
 
