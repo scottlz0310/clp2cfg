@@ -16,6 +16,42 @@ pub struct CliInvocation {
     pub ignore_failure: bool,
 }
 
+/// Minimum character count for standalone secret values to avoid redacting common short
+/// tokens like `"1"` or `"ok"` in CLI error output; `KEY=VALUE` / `Header: Value` pairs
+/// are always redacted regardless of value length.
+const MIN_STANDALONE_SECRET_LEN: usize = 4;
+
+#[derive(Clone, Copy)]
+enum SecretArg {
+    None,
+    Env,
+    Header,
+}
+
+impl SecretArg {
+    fn from_flag(arg: &str) -> Self {
+        match arg {
+            "-e" | "--env" => Self::Env,
+            "-H" | "--header" => Self::Header,
+            _ => Self::None,
+        }
+    }
+
+    fn redact_arg(self, arg: &str) -> String {
+        match self {
+            Self::Env => match arg.split_once('=') {
+                Some((key, _)) => format!("{key}=***"),
+                None => "***".to_string(),
+            },
+            Self::Header => match arg.split_once(':') {
+                Some((key, _)) => format!("{}: ***", key.trim_end()),
+                None => "***".to_string(),
+            },
+            Self::None => arg.to_string(),
+        }
+    }
+}
+
 impl CliInvocation {
     pub(super) fn new(program: &str, args: Vec<String>, ignore_failure: bool) -> Self {
         Self {
@@ -36,32 +72,42 @@ impl CliInvocation {
         self.render(true)
     }
 
-    fn render(&self, redact_secrets: bool) -> String {
-        #[derive(Clone, Copy)]
-        enum SecretArg {
-            None,
-            Env,
-            Header,
+    /// Replaces secret values passed via `-e` / `--env` and `-H` / `--header` in `text`
+    /// (such as subprocess `stderr`) with `***`.
+    pub fn redact_text(&self, text: &str) -> String {
+        let rules = self.secret_redaction_rules();
+        if rules.is_empty() || text.is_empty() {
+            return text.to_string();
         }
+        // Single-pass left-to-right longest match so already-redacted `***` spans are never
+        // re-matched and real secrets containing `***` are still redacted safely.
+        let mut redacted = String::with_capacity(text.len());
+        let mut pos = 0;
+        while pos < text.len() {
+            let rest = &text[pos..];
+            if let Some((target, replacement)) =
+                rules.iter().find(|(target, _)| rest.starts_with(target))
+            {
+                redacted.push_str(replacement);
+                pos += target.len();
+            } else if let Some(ch) = rest.chars().next() {
+                redacted.push(ch);
+                pos += ch.len_utf8();
+            } else {
+                break;
+            }
+        }
+        redacted
+    }
 
+    fn arg_entries(&self) -> impl Iterator<Item = (&str, SecretArg)> {
         let mut after = SecretArg::None;
         let mut past_double_dash = false;
-        let mut parts = vec![shell_quote(&self.program)];
-        for arg in &self.args {
-            let value = if redact_secrets && !past_double_dash {
-                match after {
-                    SecretArg::Env => match arg.split_once('=') {
-                        Some((key, _)) => format!("{key}=***"),
-                        None => "***".to_string(),
-                    },
-                    SecretArg::Header => match arg.split_once(':') {
-                        Some((key, _)) => format!("{}: ***", key.trim_end()),
-                        None => "***".to_string(),
-                    },
-                    SecretArg::None => arg.clone(),
-                }
+        self.args.iter().map(move |arg| {
+            let kind = if past_double_dash {
+                SecretArg::None
             } else {
-                arg.clone()
+                after
             };
 
             if past_double_dash {
@@ -70,15 +116,78 @@ impl CliInvocation {
                 past_double_dash = true;
                 after = SecretArg::None;
             } else {
-                after = match arg.as_str() {
-                    "-e" | "--env" => SecretArg::Env,
-                    "-H" | "--header" => SecretArg::Header,
-                    _ => SecretArg::None,
-                };
+                after = SecretArg::from_flag(arg);
             }
+
+            (arg.as_str(), kind)
+        })
+    }
+
+    fn secret_redaction_rules(&self) -> Vec<(String, String)> {
+        let mut rules = Vec::new();
+        for (arg, kind) in self.arg_entries() {
+            collect_secret_rules(kind, arg, &mut rules);
+        }
+        // Sort longest-first so longest match wins at each byte offset.
+        rules.retain(|(target, _)| !target.is_empty());
+        rules.sort_by(|a, b| b.0.len().cmp(&a.0.len()).then_with(|| a.0.cmp(&b.0)));
+        rules.dedup_by(|a, b| a.0 == b.0);
+        rules
+    }
+
+    fn render(&self, redact_secrets: bool) -> String {
+        let mut parts = vec![shell_quote(&self.program)];
+        for (arg, secret_kind) in self.arg_entries() {
+            let value = if redact_secrets && !matches!(secret_kind, SecretArg::None) {
+                secret_kind.redact_arg(arg)
+            } else {
+                arg.to_string()
+            };
             parts.push(shell_quote(&value));
         }
         parts.join(" ")
+    }
+}
+
+fn push_standalone_secret(value: &str, rules: &mut Vec<(String, String)>) {
+    if value.chars().count() >= MIN_STANDALONE_SECRET_LEN {
+        rules.push((value.to_string(), "***".to_string()));
+    }
+}
+
+fn collect_secret_rules(kind: SecretArg, arg: &str, rules: &mut Vec<(String, String)>) {
+    match kind {
+        SecretArg::None => {}
+        SecretArg::Env => match arg.split_once('=') {
+            Some((key, val)) if !val.is_empty() => {
+                rules.push((arg.to_string(), format!("{key}=***")));
+                push_standalone_secret(val, rules);
+            }
+            Some(_) => {}
+            None => push_standalone_secret(arg, rules),
+        },
+        SecretArg::Header => match arg.split_once(':') {
+            Some((key, raw_val)) => {
+                let val = raw_val.trim();
+                if val.is_empty() {
+                    return;
+                }
+                let masked_pair = format!("{}: ***", key.trim_end());
+                rules.push((arg.to_string(), masked_pair.clone()));
+                let normalized_pair = format!("{}: {val}", key.trim_end());
+                if normalized_pair != arg {
+                    rules.push((normalized_pair, masked_pair));
+                }
+                push_standalone_secret(val, rules);
+                if let Some((_, rest)) = val.split_once(char::is_whitespace) {
+                    let credential = rest.trim_start();
+                    if !credential.is_empty() && !credential.contains(char::is_whitespace) {
+                        push_standalone_secret(credential, rules);
+                    }
+                }
+            }
+            None => push_standalone_secret(arg, rules),
+        },
     }
 }
 
@@ -370,6 +479,78 @@ mod tests {
             inv.display_redacted(),
             "claude mcp add --transport http api https://example.com/mcp -H 'Authorization: ***'"
         );
+    }
+
+    #[test]
+    fn test_redact_text_masks_secrets_safely() {
+        let inv = CliInvocation::new(
+            "claude",
+            vec![
+                "mcp".into(),
+                "add".into(),
+                "-e".into(),
+                "API_KEY=secret-value-123".into(),
+                "--env".into(),
+                "SHORT=ab".into(),
+                "-e".into(),
+                "SUB=secret-value".into(),
+                "-e".into(),
+                "EMPTY=".into(),
+                "-H".into(),
+                "Authorization: Bearer bearer-token-999".into(),
+                "-e".into(),
+                "ASTERISK_KEY=alpha***omega".into(),
+                "-H".into(),
+                "X-Api-Key: Bearer beta***gamma".into(),
+                "--".into(),
+                "node".into(),
+                "ARG=post-double-dash-ok".into(),
+            ],
+            false,
+        );
+
+        let cases = [
+            (
+                "pair env leaked",
+                "failed: API_KEY=secret-value-123",
+                "failed: API_KEY=***",
+            ),
+            (
+                "overlapping longer secret masked before shorter substring",
+                "bad value secret-value-123 and secret-value",
+                "bad value *** and ***",
+            ),
+            (
+                "short value masked in pair form only, standalone not corrupted",
+                "line ab failed with SHORT=ab",
+                "line ab failed with SHORT=***",
+            ),
+            (
+                "header full pair, header value, and bearer credential",
+                "rejected Authorization: Bearer bearer-token-999 (token bearer-token-999)",
+                "rejected Authorization: *** (token ***)",
+            ),
+            (
+                "env secret containing *** is redacted in pair and standalone forms",
+                "error: ASTERISK_KEY=alpha***omega (alpha***omega)",
+                "error: ASTERISK_KEY=*** (***)",
+            ),
+            (
+                "header secret containing *** is redacted in pair, value, and credential forms",
+                "error: X-Api-Key: Bearer beta***gamma (Bearer beta***gamma / beta***gamma)",
+                "error: X-Api-Key: *** (*** / ***)",
+            ),
+            (
+                "post-double-dash args are not treated as secrets",
+                "running ARG=post-double-dash-ok failed with code 1",
+                "running ARG=post-double-dash-ok failed with code 1",
+            ),
+            ("empty stderr remains empty", "", ""),
+        ];
+
+        for (name, input, expected) in cases {
+            assert_eq!(inv.redact_text(input), expected, "{name}");
+        }
     }
 
     fn remote_servers(transport: Option<&str>, headers: &[(&str, &str)]) -> McpServersMap {
