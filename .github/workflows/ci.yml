@@ -29,6 +29,9 @@ jobs:
       - name: Lint と Formatting を検査
         run: bun run check
 
+      - name: スクリプトのテスト
+        run: bun test
+
   rust:
     name: Rust (Windows)
     runs-on: windows-latest
