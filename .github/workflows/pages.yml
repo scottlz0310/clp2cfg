@@ -1,0 +1,59 @@
+name: Pages
+
+# プライバシーポリシーを GitHub Pages へ公開する。本文の正本は docs/privacy-policy.md で、
+# scripts/build-pages.ts が HTML を生成する。
+# 初回は、リポジトリの Settings > Pages で Source を「GitHub Actions」に設定したうえで手動実行する。
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - docs/privacy-policy.md
+      - scripts/build-pages.ts
+      - .github/workflows/pages.yml
+      - package.json
+      - bun.lock
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# 公開を直列にする。実行中の公開は、取り消さずに最後まで進める。
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: ページの生成
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: .bun-version
+
+      - name: 依存関係をインストール
+        run: bun install --frozen-lockfile
+
+      - name: ページを生成
+        run: bun run build:pages
+
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: site
+
+  deploy:
+    name: 公開
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v5

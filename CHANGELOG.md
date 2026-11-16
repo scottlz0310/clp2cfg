@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- プライバシーポリシーの正本（`docs/privacy-policy.md`・日英併記）と、HTML 生成スクリプト（`scripts/build-pages.ts`）・検証テスト（`scripts/privacy-policy.test.ts`）・GitHub Pages 公開ワークフロー（`.github/workflows/pages.yml`）を追加
+
 ### Fixed
 
 - `crates/clp2cfg-core/src/discovery.rs` の `is_executable_file` を Unix / 非 Unix の `#[cfg]` ごとに関数分割し、Rust 1.100.0 の Clippy（`clippy::needless_bool`）で警告・失敗しないように修正（#96 対応）

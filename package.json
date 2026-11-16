@@ -5,11 +5,13 @@
   "description": "Lightweight GUI tool to parse and merge MCP server config snippets into AI client configurations",
   "type": "module",
   "scripts": {
+    "build:pages": "bun run scripts/build-pages.ts",
     "check": "biome check .",
     "check:fix": "biome check --write .",
     "format": "biome format --write .",
     "lint": "biome lint --write .",
-    "prepare": "lefthook install"
+    "prepare": "lefthook install",
+    "test": "bun test"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.6.7",

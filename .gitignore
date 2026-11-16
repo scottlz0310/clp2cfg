@@ -6,6 +6,7 @@
 node_modules/
 bun.lockb
 # bun.lock (text format) is tracked
+/site/
 
 # Temporary & backup files
 *.tmp
