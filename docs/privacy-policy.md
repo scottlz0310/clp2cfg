@@ -27,7 +27,7 @@
 
 クリップボード、ファイル、標準入力、または引数から受け取った設定スニペットには、API キーや認証トークン等の環境変数・HTTP ヘッダーが含まれる場合があります。本アプリはこれらを**すべて端末内のメモリ上でのみ処理**し、外部へ送信したり、入力履歴として永続保存したりしません。
 
-プレビュー表示、`--dry-run` の出力、および CLI 委譲エラーの表示では、環境変数や HTTP ヘッダーの値を `***` としてマスク表示します（GUI 上でユーザーが明示的に表示を切り替えた場合や、設定ファイル・外部 CLI へ実際に適用する際には実値を使用します）。
+`--dry-run` の出力、および CLI 委譲エラーに含まれる実行コマンド表記では、環境変数や HTTP ヘッダーの値を `***` としてマスク表示します（また、GUI のプレースホルダー入力欄では既定で伏せ字表示されます）。ただし、外部 CLI が返した標準エラー出力（`stderr`）などの診断出力はマスク対象外であり、外部 CLI 側が引数等の値をエラー出力に含めた場合はそのまま表示されます（設定ファイル・外部 CLI へ実際に適用する際や、GUI のプレビュー表示・「値を表示」切替時にも実値を使用します）。
 
 ### ローカルの設定ファイルと外部 CLI へのアクセス
 
@@ -83,7 +83,7 @@ The app reads text from your clipboard in the following situations:
 
 Configuration snippets received from the clipboard, files, standard input, or command-line arguments may contain sensitive values such as API keys, tokens, environment variables, or HTTP headers. The app processes all of this data **exclusively in memory on your device** and never transmits it externally or persists it as input history.
 
-In preview panes, `--dry-run` output, and CLI delegation error messages, sensitive values in environment variables and HTTP headers are masked as `***` (actual values are used only when you explicitly toggle visibility in the GUI or when applying configurations to target files or external CLIs).
+In `--dry-run` output and the command notation within CLI delegation errors, sensitive values in environment variables and HTTP headers are masked as `***` (and placeholder input fields in the GUI are masked by default). However, diagnostic output returned by external CLIs (such as `stderr`) is not masked; if an external CLI includes passed values in its error output, they are displayed as-is (actual values are also used in GUI preview panes, when you toggle value visibility in the GUI, and when applying configurations to target files or external CLIs).
 
 ### Access to local configuration files and external CLIs
 
