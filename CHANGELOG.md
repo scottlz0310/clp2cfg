@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `packaging/winget/README.md` に `winget-pkgs` 審査対応手順・ローカル検証コマンド・`v0.1.0`/`v0.3.3` の実測エビデンス・Issue #38（`1.28.0` 対応、`PrivacyUrl`、`clp2cfg-cli` 同梱、自動更新設計）の事前整理を追加
 - プライバシーポリシーの正本（`docs/privacy-policy.md`・日英併記）と、HTML 生成スクリプト（`scripts/build-pages.ts`）・検証テスト（`scripts/privacy-policy.test.ts`）・GitHub Pages 公開ワークフロー（`.github/workflows/pages.yml`）を追加
 
 ### Fixed
