@@ -40,8 +40,9 @@ Note on the `DisplayVersion` warning: `DisplayVersion` is not specified in any o
 
 - **未署名バイナリの扱い**: 個人開発のためコード署名証明書による Authenticode 署名は付与していません。未署名であっても、未署名である旨と公開アセットに対する Windows Defender スキャン結果を明記することで審査を通過できます。
 - **サンドボックスでの実機確認との整合**: 最終承認前にメンテナが検証環境（Windows Sandbox 等）で実アプリを起動し、ローカル通信の有無や基本挙動を確認する場合があります。
-  - `clp2cfg` はネットワーク通信を行う実装（`std::net` / HTTP クライアント等）を持たず、スニペット解析・マージはすべて端末内のメモリとローカル設定ファイル（`.bak` バックアップ付き）のみで完結します。
-  - 外部コマンドを実行するのは、ユーザーが CLI 委譲ターゲット（`claude-cli` / `codex-cli` / `copilot-cli` / `antigravity-cli`）を明示選択して適用したときのみです。
+  - `clp2cfg` 本体自身はネットワーク通信を行う実装（`std::net` / HTTP クライアント等）を持たず、スニペット解析は端末内のメモリ上のみで処理します（起動直後・待機状態の TCP/UDP 接続も 0 件です）。
+  - ファイル系ターゲット（Claude Code / Desktop、Cursor、VS Code Copilot、Project Local `.mcp.json`、Windsurf、Cline、Roo Code、Zed）への適用では、ローカル設定ファイルへ `.bak` バックアップ付きで書き込みます。
+  - ユーザーが CLI 委譲ターゲット（`claude-cli` / `codex-cli` / `copilot-cli` / `antigravity-cli`）を明示選択して適用したときのみ、ローカルにインストールされた公式 CLI（`claude` / `codex` / `copilot` / `agy`）をサブプロセスとして実行します。この経路は `clp2cfg` によるファイル直接書き込み・`.bak` バックアップは通らず、委譲先の外部 CLI 自体が行う通信やデータ処理には各ツール提供元のプライバシーポリシーが適用されます。
   - 上記の挙動は [プライバシーポリシー](https://scottlz0310.github.io/clp2cfg/privacy-policy.html)（正本: [`docs/privacy-policy.md`](../../docs/privacy-policy.md)）およびマニフェストの説明文と一致しています。
 - **PE バージョンリソースの補足**:
   - `v0.1.0` の `clp2cfg.exe` には PE の `FileVersion` / `ProductVersion` が未埋め込みです。
@@ -52,7 +53,7 @@ PR 本文・コメントに添える未署名＋スキャン報告例:
 ```text
 - The binaries are unsigned (personal open-source project without a code-signing certificate), which is documented in the repository README.
 - Windows Defender (`MpCmdRun.exe -Scan -ScanType 3`) was run against the exact published release ZIP and extracted executables, reporting no threats.
-- The application is fully offline and makes no network connections (verified against the source code and runtime TCP/UDP state); it only reads clipboard/input locally and merges into local AI client config files with `.bak` backups.
+- The clp2cfg executables themselves make no network connections (verified against the source code and idle runtime TCP/UDP checks). When applying to file-based targets, they only merge into local AI client config files with `.bak` backups; when a user explicitly selects a CLI delegation target (`claude-cli`, `codex-cli`, `copilot-cli`, or `antigravity-cli`), the app invokes that locally installed official CLI as a subprocess without `.bak` backups, and any network or data behavior of that external CLI is governed by its own provider policy.
 ```
 
 ---
