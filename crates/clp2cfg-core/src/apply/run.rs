@@ -1,6 +1,7 @@
 use super::undo::AppliedFile;
-use super::{plan_target, ApplyError, ServerChanges, TargetIo, TargetPlan};
+use super::{plan_remove_servers, plan_target, ApplyError, ServerChanges, TargetIo, TargetPlan};
 use crate::domain::{ClientTarget, McpServersMap};
+use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 /// Whether to really change anything.
@@ -60,6 +61,54 @@ impl ApplyOutcome {
             .map(|r| r.name.clone())
             .collect()
     }
+}
+
+/// Result of removing selected MCP servers from a single file target.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RemovalOutcome {
+    /// Server names that were removed (or would be removed in dry-run).
+    pub removed: Vec<String>,
+    /// What was written, for undo. `None` in dry-run or when nothing matched `to_remove`.
+    pub written: Option<AppliedFile>,
+}
+
+/// Remove `to_remove` from a single file target (or only validate, in a dry run).
+///
+/// When `expected_source` is `Some`, the current file content must match it exactly before
+/// validating or writing; otherwise [`ApplyError::ConfigChangedSincePreview`] is returned
+/// without touching the file.
+pub fn apply_remove_servers(
+    target: &ClientTarget,
+    to_remove: &BTreeSet<String>,
+    expected_source: Option<&str>,
+    mode: Mode,
+    io: &dyn TargetIo,
+) -> Result<RemovalOutcome, ApplyError> {
+    let plan = plan_remove_servers(target, to_remove, io)?;
+    if let Some(expected) = expected_source {
+        if plan.source_content != expected {
+            return Err(ApplyError::ConfigChangedSincePreview {
+                path: target.path.clone(),
+            });
+        }
+    }
+    let written = match mode {
+        Mode::DryRun => None,
+        Mode::Apply if plan.removed.is_empty() => None,
+        Mode::Apply => {
+            io.write_config(&target.path, &plan.raw_json)?;
+            Some(AppliedFile {
+                target_name: target.name.clone(),
+                path: target.path.clone(),
+                written: plan.raw_json,
+                had_original: true,
+            })
+        }
+    };
+    Ok(RemovalOutcome {
+        removed: plan.removed,
+        written,
+    })
 }
 
 /// Apply `servers` to each target (or only check, in a dry run).
@@ -276,5 +325,83 @@ mod tests {
             Err(ApplyError::Merge(_))
         ));
         assert_eq!(io.content("/cfg/a.json").unwrap(), "{ not json");
+    }
+
+    #[test]
+    fn test_apply_remove_servers_dry_run_apply_undo_and_unreadable_file() {
+        use super::super::{undo_file, SystemIo, UndoAction, UndoError};
+        use tempfile::tempdir;
+
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("mcp.json");
+        let original = r#"{
+  "theme": "dark",
+  "mcpServers": {
+    "keep": { "command": "node" },
+    "remove-me": { "command": "uvx" }
+  }
+}"#;
+        std::fs::write(&path, original).unwrap();
+        let target = ClientTarget::new(ClientTargetKind::Cursor, path.clone(), true);
+        let to_remove = BTreeSet::from(["remove-me".to_string()]);
+
+        // Dry-Run はファイルを書き換えず .bak も作らない
+        let dry =
+            apply_remove_servers(&target, &to_remove, Some(original), Mode::DryRun, &SystemIo)
+                .unwrap();
+        assert_eq!(dry.removed, vec!["remove-me"]);
+        assert!(dry.written.is_none());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
+        assert!(!crate::writer::backup_path_for(&path).exists());
+
+        // 確認時と異なる内容へ外部変更されていた場合は拒否し、ファイルを触らない
+        let err_changed = apply_remove_servers(
+            &target,
+            &to_remove,
+            Some(r#"{"mcpServers":{}}"#),
+            Mode::Apply,
+            &SystemIo,
+        )
+        .unwrap_err();
+        assert!(matches!(
+            err_changed,
+            ApplyError::ConfigChangedSincePreview { .. }
+        ));
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
+
+        // Apply は .bak を作成し、undo_file で復元できる
+        let applied =
+            apply_remove_servers(&target, &to_remove, Some(original), Mode::Apply, &SystemIo)
+                .unwrap();
+        assert_eq!(applied.removed, vec!["remove-me"]);
+        let written_file = applied.written.expect("Apply should record AppliedFile");
+        assert!(crate::writer::backup_path_for(&path).exists());
+        let after = std::fs::read_to_string(&path).unwrap();
+        assert!(after.contains("keep") && !after.contains("remove-me"));
+
+        // 外部変更があれば Undo は拒否される
+        std::fs::write(&path, r#"{"modified":"externally"}"#).unwrap();
+        assert!(matches!(
+            undo_file(&written_file, &SystemIo),
+            Err(UndoError::ModifiedSinceApply)
+        ));
+
+        // 適用直後の内容に戻してから Undo すれば元ファイルへ復元される
+        std::fs::write(&path, &written_file.written).unwrap();
+        assert_eq!(
+            undo_file(&written_file, &SystemIo).unwrap(),
+            UndoAction::Restored
+        );
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
+
+        // 読取不能ファイル（不正 UTF-8）はエラーで無変更
+        let bad_path = dir.path().join("bad.json");
+        let bad_bytes = vec![b'{', 0xC3, 0x28, b'}'];
+        std::fs::write(&bad_path, &bad_bytes).unwrap();
+        let bad_target = ClientTarget::new(ClientTargetKind::Cursor, bad_path.clone(), true);
+        let err = apply_remove_servers(&bad_target, &to_remove, None, Mode::Apply, &SystemIo)
+            .unwrap_err();
+        assert!(matches!(err, ApplyError::ReadConfig { .. }));
+        assert_eq!(std::fs::read(&bad_path).unwrap(), bad_bytes);
     }
 }

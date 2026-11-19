@@ -15,6 +15,10 @@ pub enum ApplyError {
         source: std::io::Error,
     },
 
+    /// Config file changed on disk between preview and deletion; refuse to write stale assumptions.
+    #[error("確認後に設定ファイルが変更されています（最新の内容を再確認してください）: {}", .path.display())]
+    ConfigChangedSincePreview { path: PathBuf },
+
     #[error(transparent)]
     Merge(#[from] MergeError),
 

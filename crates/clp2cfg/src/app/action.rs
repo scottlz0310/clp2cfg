@@ -53,4 +53,17 @@ pub enum UiAction {
     JumpToPreviewServer(String),
     /// 右ペインの表示タブ（マージプレビュー / 既存設定）を切り替える
     SetPreviewTab(PreviewTab),
+    /// 既存設定一覧で削除対象サーバーのチェックを切り替える
+    ToggleDeleteServer {
+        server: String,
+        selected: bool,
+    },
+    /// 削除対象の選択をすべて解除する
+    ClearDeleteSelection,
+    /// 削除後の設定プレビュー表示と現在設定の赤ハイライト表示を切り替える
+    SetShowDeleteAfterPreview(bool),
+    /// 選択中サーバーの削除を Dry-Run 検証する
+    DryRunDelete,
+    /// 選択中サーバーの削除を適用する（.bak 作成 + Undo 可能）
+    ApplyDelete,
 }

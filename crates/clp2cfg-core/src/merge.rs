@@ -2,7 +2,7 @@
 
 use crate::domain::{ClientTargetKind, McpServersMap, ServerChange};
 use serde_json::{Map, Value};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use thiserror::Error;
 
 /// 0-based inclusive line range (`start..=end`) in a pretty-printed JSON document.
@@ -15,6 +15,8 @@ pub struct LineRange {
 /// Snapshot of an existing configuration file for inspection in the UI.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExistingConfigSnapshot {
+    /// Raw file content read when this snapshot was created (used to detect external edits).
+    pub source_content: String,
     /// Registered MCP server names under the target's `servers_key`.
     pub server_names: Vec<String>,
     /// Pretty-printed JSON with `env` / `headers` values masked as `***`.
@@ -36,6 +38,17 @@ impl ExistingConfigSnapshot {
             (&self.masked_json, &self.masked_server_lines)
         }
     }
+}
+
+/// Result of removing selected MCP servers from an existing configuration JSON.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RemoveResult {
+    /// Pretty-printed JSON after removal (raw values, for writing).
+    pub raw_json: String,
+    /// Pretty-printed JSON after removal with `env` / `headers` values masked as `***`.
+    pub masked_json: String,
+    /// Server names that existed and were removed, in deterministic order.
+    pub removed: Vec<String>,
 }
 
 /// Error types occurring during target AST merge.
@@ -214,6 +227,7 @@ pub fn inspect_existing_json(
     let target_key = servers_key(kind)?;
     if existing_json.trim().is_empty() {
         return Ok(ExistingConfigSnapshot {
+            source_content: existing_json.to_string(),
             server_names: Vec::new(),
             masked_json: "{}".to_string(),
             raw_json: "{}".to_string(),
@@ -248,11 +262,56 @@ pub fn inspect_existing_json(
     let masked_server_lines = scan_server_line_ranges(&masked_json, target_key);
 
     Ok(ExistingConfigSnapshot {
+        source_content: existing_json.to_string(),
         server_names,
         masked_json,
         raw_json,
         masked_server_lines,
         raw_server_lines,
+    })
+}
+
+/// Remove the specified MCP servers from an existing configuration JSON while preserving
+/// all other MCP servers and top-level properties.
+///
+/// When all servers under `servers_key` are removed, the `servers_key` container is kept as
+/// an empty JSON object (`{}`) so the file structure remains stable across clients.
+pub fn remove_mcp_servers(
+    kind: ClientTargetKind,
+    existing_json: &str,
+    to_remove: &BTreeSet<String>,
+) -> Result<RemoveResult, MergeError> {
+    let target_key = servers_key(kind)?;
+    let mut root = parse_existing(kind, existing_json)?;
+    let root_map = root.as_object_mut().ok_or(MergeError::RootNotObject)?;
+
+    let mut removed = Vec::new();
+    if let Some(value) = root_map.get_mut(target_key) {
+        let servers_container = value.as_object_mut().ok_or_else(|| {
+            MergeError::InvalidExistingJson(format!(
+                "'{}' field exists but is not an object",
+                target_key
+            ))
+        })?;
+        for name in to_remove {
+            if servers_container.remove(name).is_some() {
+                removed.push(name.clone());
+            }
+        }
+    }
+
+    let raw_json = serde_json::to_string_pretty(&root)
+        .map_err(|e| MergeError::SerializationFailed(e.to_string()))?;
+
+    let mut masked_root = root;
+    mask_secret_fields(&mut masked_root, target_key);
+    let masked_json = serde_json::to_string_pretty(&masked_root)
+        .map_err(|e| MergeError::SerializationFailed(e.to_string()))?;
+
+    Ok(RemoveResult {
+        raw_json,
+        masked_json,
+        removed,
     })
 }
 
@@ -1113,6 +1172,71 @@ mod tests {
         ));
         assert_eq!(
             inspect_existing_json(ClientTargetKind::CodexCli, "{}"),
+            Err(MergeError::NotFileTarget)
+        );
+    }
+
+    #[test]
+    fn test_remove_mcp_servers_preserves_other_servers_and_keeps_empty_container() {
+        let existing = r#"{
+            "theme": "dark",
+            "mcpServers": {
+                "keep": {
+                    "command": "node",
+                    "env": { "SECRET": "keep-secret" }
+                },
+                "drop-a": { "command": "uvx" },
+                "drop-b": { "command": "bunx" }
+            }
+        }"#;
+
+        let partial = remove_mcp_servers(
+            ClientTargetKind::Cursor,
+            existing,
+            &BTreeSet::from(["drop-a".to_string(), "missing".to_string()]),
+        )
+        .unwrap();
+        assert_eq!(partial.removed, vec!["drop-a"]);
+        assert!(partial.raw_json.contains("keep-secret"));
+        assert!(!partial.masked_json.contains("keep-secret"));
+        assert!(partial.masked_json.contains(r#""SECRET": "***""#));
+        let val: Value = serde_json::from_str(&partial.raw_json).unwrap();
+        assert_eq!(val["theme"], "dark");
+        assert!(val["mcpServers"].get("keep").is_some());
+        assert!(val["mcpServers"].get("drop-a").is_none());
+        assert!(val["mcpServers"].get("drop-b").is_some());
+
+        // 全サーバーを削除しても servers_key は空オブジェクト {} として残す
+        let all = remove_mcp_servers(
+            ClientTargetKind::Cursor,
+            existing,
+            &BTreeSet::from([
+                "keep".to_string(),
+                "drop-a".to_string(),
+                "drop-b".to_string(),
+            ]),
+        )
+        .unwrap();
+        assert_eq!(all.removed, vec!["drop-a", "drop-b", "keep"]);
+        let empty_val: Value = serde_json::from_str(&all.raw_json).unwrap();
+        assert_eq!(empty_val["theme"], "dark");
+        assert_eq!(empty_val["mcpServers"], Value::Object(Map::new()));
+
+        // Zed JSONC 対応
+        let zed = "{\n  // comment\n  \"theme\": \"One Dark\",\n  \"context_servers\": {\n    \"a\": { \"command\": \"x\", },\n    \"b\": { \"command\": \"y\", },\n  },\n}";
+        let zed_res = remove_mcp_servers(
+            ClientTargetKind::Zed,
+            zed,
+            &BTreeSet::from(["a".to_string()]),
+        )
+        .unwrap();
+        let zed_val: Value = serde_json::from_str(&zed_res.raw_json).unwrap();
+        assert_eq!(zed_val["theme"], "One Dark");
+        assert!(zed_val["context_servers"].get("a").is_none());
+        assert!(zed_val["context_servers"].get("b").is_some());
+
+        assert_eq!(
+            remove_mcp_servers(ClientTargetKind::ClaudeCli, "{}", &BTreeSet::new()),
             Err(MergeError::NotFileTarget)
         );
     }

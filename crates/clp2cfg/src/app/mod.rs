@@ -502,4 +502,31 @@ mod tests {
         app.state.update(UiAction::SelectTarget(2));
         run_headless(&ctx, &mut app);
     }
+
+    #[test]
+    fn test_delete_selection_and_after_preview_render_without_panic() {
+        let temp = tempdir().unwrap();
+        let path = temp.path().join("mcp.json");
+        std::fs::write(
+            &path,
+            r#"{"mcpServers":{"keep":{"command":"node"},"drop":{"command":"uvx"}}}"#,
+        )
+        .unwrap();
+        let mut app = new_app(vec![clp2cfg_core::discovery::file_target(
+            ClientTargetKind::Cursor,
+            path,
+        )]);
+        app.state.auto_read_clipboard = false;
+
+        let ctx = egui::Context::default();
+        app.state.update(UiAction::ToggleDeleteServer {
+            server: "drop".to_string(),
+            selected: true,
+        });
+        // 現在設定上での削除対象赤ハイライト描画
+        run_headless(&ctx, &mut app);
+        // 削除後設定プレビュー描画
+        app.state.update(UiAction::SetShowDeleteAfterPreview(true));
+        run_headless(&ctx, &mut app);
+    }
 }
