@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-19
+
 ### Added
 
 - GUI の「既存設定」タブに登録済み MCP サーバーの削除対象選択・赤ハイライト／削除後設定プレビュー・削除 Dry-Run 検証・削除適用（`.bak` バックアップ作成および直前の取り消しによる復元対応、全削除時は `servers_key` を空オブジェクト `{}` で維持）を追加（#109）
@@ -174,7 +176,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `Cargo.toml` の `[dev-dependencies]` から重複していた `tempfile` を削除
 
-[Unreleased]: https://github.com/scottlz0310/clp2cfg/compare/v0.3.3...HEAD
+[Unreleased]: https://github.com/scottlz0310/clp2cfg/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/scottlz0310/clp2cfg/compare/v0.3.3...v0.4.0
 [0.3.3]: https://github.com/scottlz0310/clp2cfg/compare/v0.3.2...v0.3.3
 [0.3.2]: https://github.com/scottlz0310/clp2cfg/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/scottlz0310/clp2cfg/compare/v0.3.0...v0.3.1
