@@ -38,4 +38,6 @@ pub enum UiAction {
     DryRun,
     /// 直前の適用で書き込んだファイルを元に戻す
     Undo,
+    /// プレビュー内の指定サーバー箇所へスクロールジャンプする
+    JumpToPreviewServer(String),
 }

@@ -32,7 +32,7 @@ pub fn target_pane(ui: &mut egui::Ui, state: &AppState) -> Vec<UiAction> {
         ui.separator();
 
         if let Some(entry) = state.target_entries.get(state.selected_target_idx) {
-            preview_pane(ui, entry);
+            actions.extend(preview_pane(ui, state, state.selected_target_idx, entry));
         }
     });
     actions

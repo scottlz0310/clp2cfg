@@ -101,7 +101,13 @@ mod tests {
 
     #[test]
     fn test_run_subprocess_launch_failure() {
-        let inv = CliInvocation::new("clp2cfg-nonexistent-binary", vec![], false);
+        let inv = CliInvocation::new(
+            "srv",
+            crate::delegate::plan::CliOperation::Add,
+            "clp2cfg-nonexistent-binary",
+            vec![],
+            false,
+        );
         assert!(matches!(
             run_invocations(&[inv]),
             Err(CliError::LaunchFailed { .. })
@@ -111,9 +117,21 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn test_run_subprocess_real_exit_status() {
-        let ok = CliInvocation::new("true", vec![], false);
+        let ok = CliInvocation::new(
+            "srv",
+            crate::delegate::plan::CliOperation::Add,
+            "true",
+            vec![],
+            false,
+        );
         assert!(run_invocations(&[ok]).is_ok());
-        let bad = CliInvocation::new("false", vec![], false);
+        let bad = CliInvocation::new(
+            "srv",
+            crate::delegate::plan::CliOperation::Add,
+            "false",
+            vec![],
+            false,
+        );
         assert!(matches!(
             run_invocations(&[bad]),
             Err(CliError::CommandFailed { .. })
@@ -123,6 +141,8 @@ mod tests {
     #[test]
     fn test_command_failed_error_does_not_leak_env_values() {
         let inv = CliInvocation::new(
+            "srv",
+            crate::delegate::plan::CliOperation::Add,
             "definitely-not-a-real-program",
             vec![
                 "mcp".into(),
@@ -139,6 +159,8 @@ mod tests {
     #[test]
     fn test_build_command_failed_error_redacts_stderr_secrets() {
         let inv = CliInvocation::new(
+            "srv",
+            crate::delegate::plan::CliOperation::Add,
             "claude",
             vec![
                 "mcp".into(),

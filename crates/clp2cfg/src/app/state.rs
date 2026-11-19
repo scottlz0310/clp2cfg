@@ -4,13 +4,23 @@
 use super::action::UiAction;
 use super::ports::ClipboardSource;
 use clp2cfg_core::apply::{
-    apply_targets, plan_target, undo_file, Applied, LastApply, Mode, ServerChanges, TargetIo,
-    UndoAction,
+    apply_targets, plan_target, undo_file, Applied, LastApply, Mode, ServerChanges,
+    ServerLineRanges, TargetIo, UndoAction,
 };
+use clp2cfg_core::delegate::plan::CliInvocation;
 use clp2cfg_core::domain::{ClientTarget, McpServersMap, ServerChange, TargetAction};
 use clp2cfg_core::snippet::filter::FilterOptions;
 use clp2cfg_core::snippet::pipeline::{prepare, Prepared};
 use clp2cfg_core::snippet::placeholder::{is_placeholder, EnvOverrides, EnvRef};
+
+/// プレビュー内の特定サーバー箇所へのスクロールジャンプ要求
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PreviewJumpRequest {
+    pub target_idx: usize,
+    pub server: String,
+    /// 同一サーバーへの再クリックも検知するための連番
+    pub seq: u64,
+}
 
 /// 各クライアント設定ターゲットの GUI 表示・状態
 #[derive(Debug, Clone)]
@@ -21,6 +31,10 @@ pub struct TargetEntry {
     pub diff_preview: Option<String>,
     /// サーバーごとの「新規追加 / 上書き / 変更なし」（ファイル系ターゲットのみ）
     pub changes: Option<ServerChanges>,
+    /// マージ結果 JSON 内のサーバーごとの行範囲（ファイル系ターゲットのみ）
+    pub server_lines: Option<ServerLineRanges>,
+    /// 実行予定コマンド列（CLI 委譲ターゲットのみ）
+    pub cli_invocations: Option<Vec<CliInvocation>>,
     pub error: Option<String>,
 }
 
@@ -31,6 +45,8 @@ impl TargetEntry {
             target,
             diff_preview: None,
             changes: None,
+            server_lines: None,
+            cli_invocations: None,
             error: None,
         }
     }
@@ -79,6 +95,10 @@ pub struct AppState {
     pub target_entries: Vec<TargetEntry>,
     /// 右ペインで差分詳細を表示するターゲットのインデックス
     pub selected_target_idx: usize,
+    /// プレビュー内の該当サーバーへのスクロールジャンプ要求
+    pub preview_jump_request: Option<PreviewJumpRequest>,
+    /// ジャンプ要求の連番カウンタ
+    preview_jump_seq: u64,
     /// 操作結果ステータスメッセージ (メッセージ, is_error)
     pub status_message: Option<(String, bool)>,
     /// 自動クリップボード読み取りトグル（次回起動へ永続化される）
@@ -112,6 +132,8 @@ impl AppState {
             replace_pipx_with_uvx: true,
             target_entries,
             selected_target_idx: 0,
+            preview_jump_request: None,
+            preview_jump_seq: 0,
             status_message: None,
             auto_read_clipboard: true,
             reveal_env_inputs: false,
@@ -144,6 +166,9 @@ impl AppState {
             }
             UiAction::SelectTarget(idx) => {
                 if idx < self.target_entries.len() {
+                    if self.selected_target_idx != idx {
+                        self.preview_jump_request = None;
+                    }
                     self.selected_target_idx = idx;
                 }
             }
@@ -173,6 +198,14 @@ impl AppState {
             UiAction::Apply => self.apply_all(false),
             UiAction::DryRun => self.apply_all(true),
             UiAction::Undo => self.undo_last_apply(),
+            UiAction::JumpToPreviewServer(server) => {
+                self.preview_jump_seq += 1;
+                self.preview_jump_request = Some(PreviewJumpRequest {
+                    target_idx: self.selected_target_idx,
+                    server,
+                    seq: self.preview_jump_seq,
+                });
+            }
         }
     }
 
@@ -255,9 +288,12 @@ impl AppState {
         if trimmed.is_empty() {
             self.placeholder_fields.clear();
             self.parsed_config = Err("入力が空です".to_string());
+            self.preview_jump_request = None;
             for entry in &mut self.target_entries {
                 entry.diff_preview = None;
                 entry.changes = None;
+                entry.server_lines = None;
+                entry.cli_invocations = None;
                 entry.error = None;
             }
             return;
@@ -280,11 +316,15 @@ impl AppState {
                         Ok(plan) => {
                             entry.diff_preview = Some(plan.preview());
                             entry.changes = plan.changes().cloned();
+                            entry.server_lines = plan.server_lines().cloned();
+                            entry.cli_invocations = plan.invocations().map(ToOwned::to_owned);
                             entry.error = None;
                         }
                         Err(err) => {
                             entry.diff_preview = None;
                             entry.changes = None;
+                            entry.server_lines = None;
+                            entry.cli_invocations = None;
                             entry.error = Some(format!("マージプレビュー生成失敗: {}", err));
                         }
                     }
@@ -300,9 +340,12 @@ impl AppState {
             Err(err) => {
                 self.placeholder_fields.clear();
                 self.parsed_config = Err(format!("パースエラー: {}", err));
+                self.preview_jump_request = None;
                 for entry in &mut self.target_entries {
                     entry.diff_preview = None;
                     entry.changes = None;
+                    entry.server_lines = None;
+                    entry.cli_invocations = None;
                     entry.error = None;
                 }
                 self.status_message = Some((format!("パース失敗: {}", err), true));
@@ -1456,6 +1499,20 @@ mod tests {
         assert!(!state.auto_read_clipboard);
         state.update(UiAction::SetAutoRead(true));
         assert!(state.auto_read_clipboard);
+
+        // プレビュージャンプ要求: 連番がインクリメントされ、別ターゲット切替でクリアされる
+        state.update(UiAction::JumpToPreviewServer("srv-a".to_string()));
+        let first = state.preview_jump_request.clone().unwrap();
+        assert_eq!(first.target_idx, 1);
+        assert_eq!(first.server, "srv-a");
+        assert_eq!(first.seq, 1);
+
+        state.update(UiAction::JumpToPreviewServer("srv-a".to_string()));
+        let second = state.preview_jump_request.clone().unwrap();
+        assert_eq!(second.seq, 2);
+
+        state.update(UiAction::SelectTarget(0));
+        assert!(state.preview_jump_request.is_none());
     }
     #[test]
     fn test_startup_options_default_matches_gui_defaults() {
