@@ -15,6 +15,8 @@ pub struct LineRange {
 /// Snapshot of an existing configuration file for inspection in the UI.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExistingConfigSnapshot {
+    /// Raw file content read when this snapshot was created (used to detect external edits).
+    pub source_content: String,
     /// Registered MCP server names under the target's `servers_key`.
     pub server_names: Vec<String>,
     /// Pretty-printed JSON with `env` / `headers` values masked as `***`.
@@ -225,6 +227,7 @@ pub fn inspect_existing_json(
     let target_key = servers_key(kind)?;
     if existing_json.trim().is_empty() {
         return Ok(ExistingConfigSnapshot {
+            source_content: existing_json.to_string(),
             server_names: Vec::new(),
             masked_json: "{}".to_string(),
             raw_json: "{}".to_string(),
@@ -259,6 +262,7 @@ pub fn inspect_existing_json(
     let masked_server_lines = scan_server_line_ranges(&masked_json, target_key);
 
     Ok(ExistingConfigSnapshot {
+        source_content: existing_json.to_string(),
         server_names,
         masked_json,
         raw_json,

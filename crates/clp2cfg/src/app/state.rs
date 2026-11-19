@@ -663,8 +663,24 @@ impl AppState {
             self.delete_preview = None;
             return;
         };
+        let Some(ExistingTargetState::Loaded(snapshot)) = &entry.existing_config else {
+            self.delete_preview = Some(Err(
+                "既存設定が読み込まれていないため削除プレビューを生成できません".to_string(),
+            ));
+            return;
+        };
+        let expected_source = snapshot.source_content.as_str();
         self.delete_preview = Some(
             plan_remove_servers(&entry.target, &self.delete_selection, self.io.as_ref())
+                .and_then(|plan| {
+                    if plan.source_content != expected_source {
+                        Err(clp2cfg_core::apply::ApplyError::ConfigChangedSincePreview {
+                            path: entry.target.path.clone(),
+                        })
+                    } else {
+                        Ok(plan)
+                    }
+                })
                 .map_err(|err| format!("削除プレビュー生成失敗: {err}")),
         );
     }
@@ -676,28 +692,63 @@ impl AppState {
                 Some(("削除対象のサーバーが選択されていません".to_string(), true));
             return;
         }
-        let Some(target) = self
-            .target_entries
-            .get(self.selected_target_idx)
-            .map(|e| e.target.clone())
+        let Some((target, expected_source)) =
+            self.target_entries.get(self.selected_target_idx).map(|e| {
+                let source = match &e.existing_config {
+                    Some(ExistingTargetState::Loaded(snap)) => Some(snap.source_content.clone()),
+                    _ => None,
+                };
+                (e.target.clone(), source)
+            })
         else {
             self.status_message = Some(("対象ターゲットが選択されていません".to_string(), true));
             return;
         };
 
-        let expected_source = self
-            .delete_preview
-            .as_ref()
-            .and_then(|res| res.as_ref().ok())
-            .map(|plan| plan.source_content.clone());
+        let prefix = if dry_run { "[Dry-Run] " } else { "" };
+
+        // 表示・確認済みの既存設定スナップショットおよび有効な削除プレビューが無い場合は fail-closed で拒否する
+        let Some(expected_source) = expected_source else {
+            self.clear_delete_selection();
+            self.refresh_existing_configs();
+            self.status_message = Some((
+                format!(
+                    "{prefix}削除失敗: {}: 確認済みの既存設定がありません（最新の内容を再確認してください）",
+                    target.name
+                ),
+                true,
+            ));
+            return;
+        };
+        if let Some(Err(preview_err)) = &self.delete_preview {
+            let err_msg = preview_err.clone();
+            self.clear_delete_selection();
+            self.refresh_existing_configs();
+            self.status_message = Some((
+                format!("{prefix}削除失敗: {}: {err_msg}", target.name),
+                true,
+            ));
+            return;
+        }
+        if self.delete_preview.is_none() {
+            self.clear_delete_selection();
+            self.refresh_existing_configs();
+            self.status_message = Some((
+                format!(
+                    "{prefix}削除失敗: {}: 削除プレビューが未生成のため実行しません（再選択してください）",
+                    target.name
+                ),
+                true,
+            ));
+            return;
+        }
 
         let mode = if dry_run { Mode::DryRun } else { Mode::Apply };
-        let prefix = if dry_run { "[Dry-Run] " } else { "" };
 
         match apply_remove_servers(
             &target,
             &self.delete_selection,
-            expected_source.as_deref(),
+            Some(&expected_source),
             mode,
             self.io.as_ref(),
         ) {
@@ -1962,5 +2013,78 @@ mod tests {
                 .and_then(ExistingTargetState::server_count),
             Some(3)
         );
+    }
+
+    #[test]
+    fn test_external_edit_between_checks_is_rejected_and_refreshes_list() {
+        let temp = tempdir().unwrap();
+        let path = temp.path().join("mcp.json");
+        std::fs::write(
+            &path,
+            r#"{"mcpServers":{"a":{"command":"old-a"},"b":{"command":"old-b"}}}"#,
+        )
+        .unwrap();
+        let target = clp2cfg_core::discovery::file_target(ClientTargetKind::Cursor, path.clone());
+        let mut app = new_state(vec![target]);
+
+        // A をチェックした後に、外部エディターが A を同名の別設定へ置き換える
+        app.update(UiAction::ToggleDeleteServer {
+            server: "a".to_string(),
+            selected: true,
+        });
+        let replaced = r#"{"mcpServers":{"a":{"command":"replaced-a"},"b":{"command":"old-b"}}}"#;
+        std::fs::write(&path, replaced).unwrap();
+
+        // そのまま B を追加チェックしても、照合元は表示中スナップショットのままなのでプレビューはエラーになる
+        app.update(UiAction::ToggleDeleteServer {
+            server: "b".to_string(),
+            selected: true,
+        });
+        assert!(matches!(app.delete_preview, Some(Err(_))));
+
+        // 削除を実行しても拒否され、ファイル無変更・選択解除・最新一覧へ更新される
+        app.update(UiAction::ApplyDelete);
+        let (msg, is_err) = app.status_message.as_ref().unwrap();
+        assert!(*is_err, "{msg}");
+        assert!(
+            msg.contains("確認後に設定ファイルが変更されています"),
+            "{msg}"
+        );
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), replaced);
+        assert!(app.delete_selection.is_empty());
+        let Some(ExistingTargetState::Loaded(snap)) = &app.target_entries[0].existing_config else {
+            panic!("expected refreshed snapshot");
+        };
+        assert!(snap.raw_json.contains("replaced-a"));
+    }
+
+    #[test]
+    fn test_preview_error_during_check_fails_closed_even_after_file_recovers() {
+        let temp = tempdir().unwrap();
+        let path = temp.path().join("mcp.json");
+        std::fs::write(&path, r#"{"mcpServers":{"a":{"command":"old-a"}}}"#).unwrap();
+        let target = clp2cfg_core::discovery::file_target(ClientTargetKind::Cursor, path.clone());
+        let mut app = new_state(vec![target]);
+
+        // ファイルが一時的に不正 JSON の間に A をチェックする（プレビューはエラー）
+        std::fs::write(&path, "{ broken json").unwrap();
+        app.update(UiAction::ToggleDeleteServer {
+            server: "a".to_string(),
+            selected: true,
+        });
+        assert!(matches!(app.delete_preview, Some(Err(_))));
+
+        // 同名の別設定を含む正常 JSON に戻してから削除しても、プレビュー失敗のまま実行は拒否される
+        let recovered = r#"{"mcpServers":{"a":{"command":"new-a-after-recovery"}}}"#;
+        std::fs::write(&path, recovered).unwrap();
+        app.update(UiAction::ApplyDelete);
+        let (msg, is_err) = app.status_message.as_ref().unwrap();
+        assert!(*is_err, "{msg}");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), recovered);
+        assert!(app.delete_selection.is_empty());
+        let Some(ExistingTargetState::Loaded(snap)) = &app.target_entries[0].existing_config else {
+            panic!("expected refreshed snapshot");
+        };
+        assert!(snap.raw_json.contains("new-a-after-recovery"));
     }
 }
