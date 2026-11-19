@@ -1,11 +1,11 @@
 //! The window's state and how it changes. Nothing here draws or touches the OS: the clipboard and
 //! the files come in through ports, so this is tested without a window.
 
-use super::action::UiAction;
+use super::action::{PreviewTab, UiAction};
 use super::ports::ClipboardSource;
 use clp2cfg_core::apply::{
-    apply_targets, plan_target, undo_file, Applied, LastApply, Mode, ServerChanges,
-    ServerLineRanges, TargetIo, UndoAction,
+    apply_targets, inspect_target, plan_target, undo_file, Applied, ExistingTargetState, LastApply,
+    Mode, ServerChanges, ServerLineRanges, TargetIo, UndoAction,
 };
 use clp2cfg_core::delegate::plan::CliInvocation;
 use clp2cfg_core::domain::{ClientTarget, McpServersMap, ServerChange, TargetAction};
@@ -35,6 +35,8 @@ pub struct TargetEntry {
     pub server_lines: Option<ServerLineRanges>,
     /// 実行予定コマンド列（CLI 委譲ターゲットのみ）
     pub cli_invocations: Option<Vec<CliInvocation>>,
+    /// 既存設定ファイルの検査結果（ファイル系ターゲットのみ）
+    pub existing_config: Option<ExistingTargetState>,
     pub error: Option<String>,
 }
 
@@ -47,6 +49,7 @@ impl TargetEntry {
             changes: None,
             server_lines: None,
             cli_invocations: None,
+            existing_config: None,
             error: None,
         }
     }
@@ -95,6 +98,8 @@ pub struct AppState {
     pub target_entries: Vec<TargetEntry>,
     /// 右ペインで差分詳細を表示するターゲットのインデックス
     pub selected_target_idx: usize,
+    /// 右ペインの表示タブ（マージプレビュー / 既存設定）
+    pub preview_tab: PreviewTab,
     /// プレビュー内の該当サーバーへのスクロールジャンプ要求
     pub preview_jump_request: Option<PreviewJumpRequest>,
     /// ジャンプ要求の連番カウンタ
@@ -125,13 +130,14 @@ impl AppState {
         clipboard: Box<dyn ClipboardSource>,
     ) -> Self {
         let target_entries = targets.into_iter().map(TargetEntry::new).collect();
-        Self {
+        let mut state = Self {
             raw_input: String::new(),
             parsed_config: Err("入力が空です".to_string()),
             replace_npx_with_bunx: true,
             replace_pipx_with_uvx: true,
             target_entries,
             selected_target_idx: 0,
+            preview_tab: PreviewTab::ExistingConfig,
             preview_jump_request: None,
             preview_jump_seq: 0,
             status_message: None,
@@ -143,6 +149,15 @@ impl AppState {
             last_clipboard_seen: None,
             io,
             clipboard,
+        };
+        state.refresh_existing_configs();
+        state
+    }
+
+    /// 全ファイル系ターゲットの既存設定ファイルを再読み込みし、登録済みサーバー一覧と件数を最新化する
+    pub fn refresh_existing_configs(&mut self) {
+        for entry in &mut self.target_entries {
+            entry.existing_config = inspect_target(&entry.target, self.io.as_ref());
         }
     }
 
@@ -205,6 +220,12 @@ impl AppState {
                     server,
                     seq: self.preview_jump_seq,
                 });
+            }
+            UiAction::SetPreviewTab(tab) => {
+                if self.preview_tab != tab {
+                    self.preview_tab = tab;
+                    self.preview_jump_request = None;
+                }
             }
         }
     }
@@ -288,6 +309,7 @@ impl AppState {
         if trimmed.is_empty() {
             self.placeholder_fields.clear();
             self.parsed_config = Err("入力が空です".to_string());
+            self.preview_tab = PreviewTab::ExistingConfig;
             self.preview_jump_request = None;
             for entry in &mut self.target_entries {
                 entry.diff_preview = None;
@@ -309,6 +331,7 @@ impl AppState {
                 placeholders,
             }) => {
                 self.placeholder_fields = placeholders;
+                self.preview_tab = PreviewTab::MergePreview;
 
                 // 各ターゲットに対するマージプレビューを計算
                 for entry in &mut self.target_entries {
@@ -466,7 +489,8 @@ impl AppState {
             }
         }
 
-        // ファイルが変わったので、プレビューと判定を作り直す（ステータスを上書きするので先に行う）
+        // ファイルが変わったので、既存設定とプレビュー・判定を作り直す（ステータスを上書きするので先に行う）
+        self.refresh_existing_configs();
         self.reparse();
 
         let mut message = if failed.is_empty() {
@@ -541,10 +565,14 @@ impl AppState {
         // 何も変更できなかった適用では、直前の記録を残す。CLI だけを実行した適用は取り消せないので、
         // 古い記録が「直前の適用」と誤認されないよう破棄する
         if !dry_run && (!applied_files.is_empty() || !applied_clis.is_empty()) {
-            self.last_apply = (!applied_files.is_empty()).then_some(LastApply {
+            let had_file_writes = !applied_files.is_empty();
+            self.last_apply = had_file_writes.then_some(LastApply {
                 files: applied_files,
                 cli_targets: applied_clis,
             });
+            if had_file_writes {
+                self.refresh_existing_configs();
+            }
         }
 
         let prefix = if dry_run { "[Dry-Run] " } else { "" };
@@ -1572,5 +1600,62 @@ mod tests {
         // Claude CLI は -H 付きコマンドをプレビューする
         let cli_preview = app.target_entries[2].diff_preview.as_ref().unwrap();
         assert!(cli_preview.contains("--transport http cloudflare-api https://mcp.cloudflare.com/mcp -H 'Authorization: Bearer real-token'"), "{cli_preview}");
+    }
+
+    #[test]
+    fn test_existing_config_tracks_apply_and_undo_and_tab_switches() {
+        let temp = tempdir().unwrap();
+        let path = temp.path().join("mcp.json");
+        std::fs::write(
+            &path,
+            r#"{"mcpServers":{"existing-srv":{"command":"node","env":{"TOKEN":"secret-1"}}}}"#,
+        )
+        .unwrap();
+        let target = clp2cfg_core::discovery::file_target(ClientTargetKind::Cursor, path);
+        let mut app = new_state(vec![target]);
+
+        // 起動直後（未入力）は既存設定タブで、1 件ロードされている
+        assert_eq!(app.preview_tab, PreviewTab::ExistingConfig);
+        assert_eq!(
+            app.target_entries[0]
+                .existing_config
+                .as_ref()
+                .and_then(ExistingTargetState::server_count),
+            Some(1)
+        );
+
+        // スニペット入力でマージプレビューへ切替
+        app.update(UiAction::SetInput(
+            r#"{"added-srv":{"command":"uvx"}}"#.to_string(),
+        ));
+        assert_eq!(app.preview_tab, PreviewTab::MergePreview);
+
+        // 手動で既存設定タブへ切替可能
+        app.update(UiAction::SetPreviewTab(PreviewTab::ExistingConfig));
+        assert_eq!(app.preview_tab, PreviewTab::ExistingConfig);
+
+        // Apply 後は既存設定のサーバー件数が 2 件に追従する
+        app.update(UiAction::Apply);
+        assert_eq!(
+            app.target_entries[0]
+                .existing_config
+                .as_ref()
+                .and_then(ExistingTargetState::server_count),
+            Some(2)
+        );
+
+        // Undo 後は元の 1 件に戻る
+        app.update(UiAction::Undo);
+        assert_eq!(
+            app.target_entries[0]
+                .existing_config
+                .as_ref()
+                .and_then(ExistingTargetState::server_count),
+            Some(1)
+        );
+
+        // Clear で既存設定タブへ戻る
+        app.update(UiAction::Clear);
+        assert_eq!(app.preview_tab, PreviewTab::ExistingConfig);
     }
 }

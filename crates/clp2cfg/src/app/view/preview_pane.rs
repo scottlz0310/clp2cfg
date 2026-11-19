@@ -1,8 +1,8 @@
-use crate::app::{AppState, TargetEntry, UiAction};
-use clp2cfg_core::apply::{count_changes, ServerChanges, ServerLineRanges};
+use crate::app::{AppState, PreviewTab, TargetEntry, UiAction};
+use clp2cfg_core::apply::{count_changes, ExistingTargetState, ServerChanges, ServerLineRanges};
 use clp2cfg_core::delegate::plan::{CliInvocation, CliOperation};
 use clp2cfg_core::domain::{ServerChange, TargetAction};
-use clp2cfg_core::merge::LineRange;
+use clp2cfg_core::merge::{ExistingConfigSnapshot, LineRange};
 use std::collections::HashMap;
 
 /// CLI サーバー識別用のアクセント色パレット（暗い背景でも視認しやすい色）
@@ -44,6 +44,52 @@ pub fn preview_pane(
         .as_ref()
         .filter(|req| req.target_idx == target_idx);
     let highlighted_server = active_jump.map(|req| req.server.as_str());
+
+    if !is_cli {
+        ui.horizontal(|ui| {
+            let merge_selected = state.preview_tab == PreviewTab::MergePreview;
+            if ui
+                .selectable_label(merge_selected, "マージプレビュー")
+                .clicked()
+            {
+                actions.push(UiAction::SetPreviewTab(PreviewTab::MergePreview));
+            }
+            let existing_label = match &entry.existing_config {
+                Some(ExistingTargetState::Loaded(snap)) => {
+                    format!("既存設定 ({}件)", snap.server_names.len())
+                }
+                Some(ExistingTargetState::Error(_)) => "既存設定 (エラー)".to_string(),
+                _ => "既存設定".to_string(),
+            };
+            let existing_selected = state.preview_tab == PreviewTab::ExistingConfig;
+            if ui
+                .selectable_label(existing_selected, existing_label)
+                .clicked()
+            {
+                actions.push(UiAction::SetPreviewTab(PreviewTab::ExistingConfig));
+            }
+        });
+        ui.add_space(4.0);
+    }
+
+    let jump_state_id = ui.make_persistent_id(("preview_jump_handled_seq", target_idx));
+    let last_handled_seq: u64 = ui.data(|d| d.get_temp(jump_state_id).unwrap_or(0));
+    let pending_jump = active_jump.filter(|req| req.seq != last_handled_seq);
+
+    if !is_cli && state.preview_tab == PreviewTab::ExistingConfig {
+        let (tab_actions, jumped_seq) = render_existing_config_pane(
+            ui,
+            state.reveal_env_inputs,
+            entry.existing_config.as_ref(),
+            highlighted_server,
+            pending_jump.map(|req| (req.server.as_str(), req.seq)),
+        );
+        actions.extend(tab_actions);
+        if let Some(seq) = jumped_seq {
+            ui.data_mut(|d| d.insert_temp(jump_state_id, seq));
+        }
+        return actions;
+    }
 
     if let Some(changes) = &entry.changes {
         ui.label(egui::RichText::new(change_summary(changes)).small());
@@ -88,10 +134,6 @@ pub fn preview_pane(
             }
         }
     }
-
-    let jump_state_id = ui.make_persistent_id(("preview_jump_handled_seq", target_idx));
-    let last_handled_seq: u64 = ui.data(|d| d.get_temp(jump_state_id).unwrap_or(0));
-    let pending_jump = active_jump.filter(|req| req.seq != last_handled_seq);
 
     if let Some(error) = &entry.error {
         ui.label(egui::RichText::new(error).color(egui::Color32::LIGHT_RED));
@@ -143,6 +185,190 @@ pub fn preview_pane(
     }
 
     actions
+}
+
+/// 既存設定ファイルと登録済み MCP サーバー一覧の表示（ファイル系ターゲットのみ）
+fn render_existing_config_pane(
+    ui: &mut egui::Ui,
+    reveal_env_inputs: bool,
+    existing: Option<&ExistingTargetState>,
+    highlighted_server: Option<&str>,
+    pending_jump: Option<(&str, u64)>,
+) -> (Vec<UiAction>, Option<u64>) {
+    let mut actions = Vec::new();
+    match existing {
+        Some(ExistingTargetState::Loaded(snapshot)) => {
+            ui.horizontal(|ui| {
+                ui.label(
+                    egui::RichText::new(format!(
+                        "登録済み MCP サーバー: {} 件",
+                        snapshot.server_names.len()
+                    ))
+                    .small(),
+                );
+                let mut reveal = reveal_env_inputs;
+                if ui
+                    .checkbox(&mut reveal, "機密値（env / headers）を表示")
+                    .changed()
+                {
+                    actions.push(UiAction::SetRevealEnv(reveal));
+                }
+            });
+
+            if snapshot.server_names.is_empty() {
+                ui.label(
+                    egui::RichText::new("この設定ファイルには MCP サーバーが登録されていません。")
+                        .small()
+                        .color(egui::Color32::GRAY),
+                );
+            } else {
+                ui.horizontal_wrapped(|ui| {
+                    for name in &snapshot.server_names {
+                        let is_focused = highlighted_server == Some(name.as_str());
+                        let button = jump_badge_button(
+                            ui,
+                            "登録済",
+                            egui::Color32::LIGHT_BLUE,
+                            name,
+                            is_focused,
+                        );
+                        if button
+                            .on_hover_text("クリックして既存設定内の該当箇所へジャンプ")
+                            .clicked()
+                        {
+                            actions.push(UiAction::JumpToPreviewServer(name.clone()));
+                        }
+                    }
+                });
+            }
+
+            let mut jumped_seq = None;
+            egui::ScrollArea::vertical()
+                .id_salt("existing_config_scroll")
+                .show(ui, |ui| {
+                    jumped_seq = render_existing_json_view(
+                        ui,
+                        snapshot,
+                        reveal_env_inputs,
+                        highlighted_server,
+                        pending_jump,
+                    );
+                });
+            (actions, jumped_seq)
+        }
+        Some(ExistingTargetState::Missing) => {
+            ui.label(
+                egui::RichText::new("設定ファイルはまだ作成されていません。")
+                    .color(egui::Color32::GRAY),
+            );
+            (actions, pending_jump.map(|(_, seq)| seq))
+        }
+        Some(ExistingTargetState::Error(err)) => {
+            ui.label(
+                egui::RichText::new(format!("既存設定の読み込みに失敗しました: {err}"))
+                    .color(egui::Color32::LIGHT_RED),
+            );
+            (actions, pending_jump.map(|(_, seq)| seq))
+        }
+        None => {
+            ui.label(
+                egui::RichText::new("CLI 経由のため、既存の登録の有無は事前に確認できません。")
+                    .color(egui::Color32::GRAY),
+            );
+            (actions, pending_jump.map(|(_, seq)| seq))
+        }
+    }
+}
+
+fn render_existing_json_view(
+    ui: &mut egui::Ui,
+    snapshot: &ExistingConfigSnapshot,
+    reveal_env_inputs: bool,
+    highlighted_server: Option<&str>,
+    pending_jump: Option<(&str, u64)>,
+) -> Option<u64> {
+    let text = if reveal_env_inputs {
+        snapshot.raw_json.as_str()
+    } else {
+        snapshot.masked_json.as_str()
+    };
+    let font_id = egui::TextStyle::Monospace.resolve(ui.style());
+    let default_color = ui.visuals().text_color();
+
+    let mut layouter = |ui: &egui::Ui, buf: &dyn egui::TextBuffer, wrap_width: f32| {
+        let job = build_existing_config_layout_job(
+            buf.as_str(),
+            &snapshot.server_lines,
+            highlighted_server,
+            font_id.clone(),
+            default_color,
+            wrap_width,
+        );
+        ui.fonts_mut(|f| f.layout_job(job))
+    };
+
+    let output = egui::TextEdit::multiline(&mut &*text)
+        .font(egui::TextStyle::Monospace)
+        .code_editor()
+        .desired_width(f32::INFINITY)
+        .layouter(&mut layouter)
+        .show(ui);
+
+    if let Some((server, seq)) = pending_jump {
+        if let Some(range) = snapshot.server_lines.get(server).copied() {
+            if let Some((start_char, end_char)) = line_range_char_span(text, range) {
+                let start_rect = output
+                    .galley
+                    .pos_from_cursor(egui::text::CCursor::new(start_char));
+                let end_rect = output
+                    .galley
+                    .pos_from_cursor(egui::text::CCursor::new(end_char));
+                let local_rect = start_rect.union(end_rect);
+                let target_rect = local_rect.translate(output.galley_pos.to_vec2());
+                ui.scroll_to_rect(target_rect, Some(egui::Align::TOP));
+            }
+        }
+        return Some(seq);
+    }
+
+    None
+}
+
+fn build_existing_config_layout_job(
+    text: &str,
+    server_lines: &ServerLineRanges,
+    highlighted_server: Option<&str>,
+    font_id: egui::FontId,
+    default_color: egui::Color32,
+    wrap_width: f32,
+) -> egui::text::LayoutJob {
+    let mut job = egui::text::LayoutJob::default();
+    job.wrap.max_width = wrap_width;
+    let focused_range = highlighted_server.and_then(|name| server_lines.get(name).copied());
+
+    for (line_idx, segment) in text.split_inclusive('\n').enumerate() {
+        let is_focused = focused_range.is_some_and(|r| line_idx >= r.start && line_idx <= r.end);
+        let (color, background) = if is_focused {
+            (
+                egui::Color32::LIGHT_BLUE,
+                egui::Color32::from_rgba_unmultiplied(120, 200, 255, 38),
+            )
+        } else {
+            (default_color, egui::Color32::TRANSPARENT)
+        };
+        job.append(
+            segment,
+            0.0,
+            egui::TextFormat {
+                font_id: font_id.clone(),
+                color,
+                background,
+                ..Default::default()
+            },
+        );
+    }
+
+    job
 }
 
 fn jump_badge_button(

@@ -2,7 +2,8 @@ use super::{ApplyError, TargetIo};
 use crate::delegate::plan::{build_cli_invocations, preview_invocations, CliInvocation};
 use crate::domain::{ClientTarget, McpServersMap, ServerChange, TargetAction};
 use crate::merge::{
-    classify_server_changes, locate_server_line_ranges, merge_mcp_servers, LineRange,
+    classify_server_changes, inspect_existing_json, locate_server_line_ranges, merge_mcp_servers,
+    ExistingConfigSnapshot, LineRange,
 };
 use std::collections::BTreeMap;
 
@@ -65,6 +66,49 @@ impl TargetPlan {
             Self::File { .. } => None,
             Self::Cli { invocations } => Some(invocations),
         }
+    }
+}
+
+/// Inspection state of an existing configuration file for a file-based target.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ExistingTargetState {
+    /// Config file does not exist yet.
+    Missing,
+    /// Config file exists and was parsed successfully.
+    Loaded(ExistingConfigSnapshot),
+    /// Config file could not be read or parsed (e.g. UTF-16, invalid JSON).
+    Error(String),
+}
+
+impl ExistingTargetState {
+    /// Number of registered MCP servers if loaded successfully.
+    pub fn server_count(&self) -> Option<usize> {
+        match self {
+            Self::Loaded(snapshot) => Some(snapshot.server_names.len()),
+            Self::Missing | Self::Error(_) => None,
+        }
+    }
+}
+
+/// Inspect the existing configuration file of `target` via `io`.
+/// Returns `None` for CLI-delegated targets (which cannot be inspected beforehand).
+pub fn inspect_target(target: &ClientTarget, io: &dyn TargetIo) -> Option<ExistingTargetState> {
+    match target.kind.action() {
+        TargetAction::CliCommand => None,
+        TargetAction::FileMerge => match io.read_config(&target.path) {
+            Ok(None) => Some(ExistingTargetState::Missing),
+            Ok(Some(content)) => match inspect_existing_json(target.kind, &content) {
+                Ok(snapshot) => Some(ExistingTargetState::Loaded(snapshot)),
+                Err(err) => Some(ExistingTargetState::Error(err.to_string())),
+            },
+            Err(source) => {
+                let err = ApplyError::ReadConfig {
+                    path: target.path.clone(),
+                    source,
+                };
+                Some(ExistingTargetState::Error(err.to_string()))
+            }
+        },
     }
 }
 
@@ -287,5 +331,49 @@ mod tests {
             servers_obj["desktop-touch"]["command"],
             r"C:\Users\alice\.bun\bin\desktop-touch-mcp.exe"
         );
+    }
+
+    #[test]
+    fn test_inspect_target_handles_missing_loaded_error_and_cli() {
+        let missing = ClientTarget::new(
+            ClientTargetKind::Cursor,
+            PathBuf::from("/cfg/missing.json"),
+            false,
+        );
+        assert_eq!(
+            inspect_target(&missing, &FakeIo::default()),
+            Some(ExistingTargetState::Missing)
+        );
+
+        let io = FakeIo::default()
+            .with_file(
+                "/cfg/ok.json",
+                r#"{"mcpServers":{"a":{"command":"node","env":{"K":"sec"}}}}"#,
+            )
+            .with_file("/cfg/bad.json", "{ broken");
+        let ok_target = ClientTarget::new(
+            ClientTargetKind::Cursor,
+            PathBuf::from("/cfg/ok.json"),
+            true,
+        );
+        let Some(ExistingTargetState::Loaded(snap)) = inspect_target(&ok_target, &io) else {
+            panic!("expected Loaded");
+        };
+        assert_eq!(snap.server_names, vec!["a"]);
+        assert!(!snap.masked_json.contains("sec"));
+        assert!(snap.raw_json.contains("sec"));
+
+        let bad_target = ClientTarget::new(
+            ClientTargetKind::Cursor,
+            PathBuf::from("/cfg/bad.json"),
+            true,
+        );
+        assert!(matches!(
+            inspect_target(&bad_target, &io),
+            Some(ExistingTargetState::Error(_))
+        ));
+
+        let cli = ClientTarget::new_cli(ClientTargetKind::ClaudeCli, Some(PathBuf::from("claude")));
+        assert_eq!(inspect_target(&cli, &io), None);
     }
 }
