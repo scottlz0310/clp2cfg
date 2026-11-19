@@ -3,7 +3,7 @@ use crate::delegate::plan::{build_cli_invocations, preview_invocations, CliInvoc
 use crate::domain::{ClientTarget, McpServersMap, ServerChange, TargetAction};
 use crate::merge::{
     classify_server_changes, inspect_existing_json, locate_server_line_ranges, merge_mcp_servers,
-    remove_mcp_servers, ExistingConfigSnapshot, LineRange, MergeError, RemoveResult,
+    remove_mcp_servers, ExistingConfigSnapshot, LineRange, MergeError,
 };
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -113,7 +113,17 @@ pub fn inspect_target(target: &ClientTarget, io: &dyn TargetIo) -> Option<Existi
 }
 
 /// Plan for removing selected MCP servers from one file target.
-pub type RemovalPlan = RemoveResult;
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RemovalPlan {
+    /// Original file content read when this plan was computed (used to detect external edits).
+    pub source_content: String,
+    /// Pretty-printed JSON after removal (raw values, for writing).
+    pub raw_json: String,
+    /// Pretty-printed JSON after removal with `env` / `headers` values masked as `***`.
+    pub masked_json: String,
+    /// Server names that existed and will be removed, in deterministic order.
+    pub removed: Vec<String>,
+}
 
 /// Work out what removing `to_remove` from `target` would do, without changing anything.
 pub fn plan_remove_servers(
@@ -135,7 +145,13 @@ pub fn plan_remove_servers(
             "Configuration file does not exist".to_string(),
         )));
     };
-    Ok(remove_mcp_servers(target.kind, &content, to_remove)?)
+    let result = remove_mcp_servers(target.kind, &content, to_remove)?;
+    Ok(RemovalPlan {
+        source_content: content,
+        raw_json: result.raw_json,
+        masked_json: result.masked_json,
+        removed: result.removed,
+    })
 }
 
 /// Work out what applying `servers` to `target` would do, without changing anything.

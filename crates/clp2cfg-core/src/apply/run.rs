@@ -73,13 +73,25 @@ pub struct RemovalOutcome {
 }
 
 /// Remove `to_remove` from a single file target (or only validate, in a dry run).
+///
+/// When `expected_source` is `Some`, the current file content must match it exactly before
+/// validating or writing; otherwise [`ApplyError::ConfigChangedSincePreview`] is returned
+/// without touching the file.
 pub fn apply_remove_servers(
     target: &ClientTarget,
     to_remove: &BTreeSet<String>,
+    expected_source: Option<&str>,
     mode: Mode,
     io: &dyn TargetIo,
 ) -> Result<RemovalOutcome, ApplyError> {
     let plan = plan_remove_servers(target, to_remove, io)?;
+    if let Some(expected) = expected_source {
+        if plan.source_content != expected {
+            return Err(ApplyError::ConfigChangedSincePreview {
+                path: target.path.clone(),
+            });
+        }
+    }
     let written = match mode {
         Mode::DryRun => None,
         Mode::Apply if plan.removed.is_empty() => None,
@@ -334,14 +346,33 @@ mod tests {
         let to_remove = BTreeSet::from(["remove-me".to_string()]);
 
         // Dry-Run はファイルを書き換えず .bak も作らない
-        let dry = apply_remove_servers(&target, &to_remove, Mode::DryRun, &SystemIo).unwrap();
+        let dry =
+            apply_remove_servers(&target, &to_remove, Some(original), Mode::DryRun, &SystemIo)
+                .unwrap();
         assert_eq!(dry.removed, vec!["remove-me"]);
         assert!(dry.written.is_none());
         assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
         assert!(!crate::writer::backup_path_for(&path).exists());
 
+        // 確認時と異なる内容へ外部変更されていた場合は拒否し、ファイルを触らない
+        let err_changed = apply_remove_servers(
+            &target,
+            &to_remove,
+            Some(r#"{"mcpServers":{}}"#),
+            Mode::Apply,
+            &SystemIo,
+        )
+        .unwrap_err();
+        assert!(matches!(
+            err_changed,
+            ApplyError::ConfigChangedSincePreview { .. }
+        ));
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
+
         // Apply は .bak を作成し、undo_file で復元できる
-        let applied = apply_remove_servers(&target, &to_remove, Mode::Apply, &SystemIo).unwrap();
+        let applied =
+            apply_remove_servers(&target, &to_remove, Some(original), Mode::Apply, &SystemIo)
+                .unwrap();
         assert_eq!(applied.removed, vec!["remove-me"]);
         let written_file = applied.written.expect("Apply should record AppliedFile");
         assert!(crate::writer::backup_path_for(&path).exists());
@@ -368,8 +399,8 @@ mod tests {
         let bad_bytes = vec![b'{', 0xC3, 0x28, b'}'];
         std::fs::write(&bad_path, &bad_bytes).unwrap();
         let bad_target = ClientTarget::new(ClientTargetKind::Cursor, bad_path.clone(), true);
-        let err =
-            apply_remove_servers(&bad_target, &to_remove, Mode::Apply, &SystemIo).unwrap_err();
+        let err = apply_remove_servers(&bad_target, &to_remove, None, Mode::Apply, &SystemIo)
+            .unwrap_err();
         assert!(matches!(err, ApplyError::ReadConfig { .. }));
         assert_eq!(std::fs::read(&bad_path).unwrap(), bad_bytes);
     }

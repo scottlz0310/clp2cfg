@@ -606,6 +606,8 @@ impl AppState {
                 cli_targets: applied_clis,
             });
             if had_file_writes {
+                // ファイル内容が変わったため、古い削除選択・削除プレビューは破棄して再確認を促す
+                self.clear_delete_selection();
                 self.refresh_existing_configs();
             }
         }
@@ -683,10 +685,22 @@ impl AppState {
             return;
         };
 
+        let expected_source = self
+            .delete_preview
+            .as_ref()
+            .and_then(|res| res.as_ref().ok())
+            .map(|plan| plan.source_content.clone());
+
         let mode = if dry_run { Mode::DryRun } else { Mode::Apply };
         let prefix = if dry_run { "[Dry-Run] " } else { "" };
 
-        match apply_remove_servers(&target, &self.delete_selection, mode, self.io.as_ref()) {
+        match apply_remove_servers(
+            &target,
+            &self.delete_selection,
+            expected_source.as_deref(),
+            mode,
+            self.io.as_ref(),
+        ) {
             Ok(outcome) => {
                 if outcome.removed.is_empty() {
                     self.status_message = Some((
@@ -732,6 +746,13 @@ impl AppState {
                 ));
             }
             Err(err) => {
+                if matches!(
+                    err,
+                    clp2cfg_core::apply::ApplyError::ConfigChangedSincePreview { .. }
+                ) {
+                    self.clear_delete_selection();
+                    self.refresh_existing_configs();
+                }
                 self.status_message =
                     Some((format!("{prefix}削除失敗: {}: {err}", target.name), true));
             }
@@ -1860,6 +1881,86 @@ mod tests {
                 .as_ref()
                 .and_then(ExistingTargetState::server_count),
             Some(2)
+        );
+    }
+
+    #[test]
+    fn test_apply_merge_clears_stale_delete_selection_and_preview() {
+        let temp = tempdir().unwrap();
+        let path = temp.path().join("mcp.json");
+        std::fs::write(
+            &path,
+            r#"{"mcpServers":{"keep":{"command":"node"},"drop":{"command":"old-cmd"}}}"#,
+        )
+        .unwrap();
+        let target = clp2cfg_core::discovery::file_target(ClientTargetKind::Cursor, path.clone());
+        let mut app = new_state(vec![target]);
+        app.target_entries[0].selected = true;
+
+        // 削除対象を選択し、削除後プレビューを開いた状態にする
+        app.update(UiAction::ToggleDeleteServer {
+            server: "drop".to_string(),
+            selected: true,
+        });
+        app.update(UiAction::SetShowDeleteAfterPreview(true));
+        assert!(app.delete_preview.is_some());
+
+        // 同名サーバーを上書きするスニペットを下部の「適用」でマージする
+        app.update(UiAction::SetInput(
+            r#"{"drop":{"command":"new-cmd"}}"#.to_string(),
+        ));
+        app.update(UiAction::Apply);
+
+        // 古い削除選択・プレビューは破棄されていること
+        assert!(app.delete_selection.is_empty());
+        assert!(app.delete_preview.is_none());
+        assert!(!app.show_delete_after_preview);
+
+        // 直後に ApplyDelete を押しても選択解除済みのためマージ結果を誤削除しない
+        app.update(UiAction::ApplyDelete);
+        assert!(app.status_message.as_ref().unwrap().1);
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert!(content.contains("new-cmd"), "{content}");
+    }
+
+    #[test]
+    fn test_apply_delete_rejects_external_modification_since_preview() {
+        let temp = tempdir().unwrap();
+        let path = temp.path().join("mcp.json");
+        std::fs::write(
+            &path,
+            r#"{"mcpServers":{"keep":{"command":"node"},"drop":{"command":"uvx"}}}"#,
+        )
+        .unwrap();
+        let target = clp2cfg_core::discovery::file_target(ClientTargetKind::Cursor, path.clone());
+        let mut app = new_state(vec![target]);
+
+        app.update(UiAction::ToggleDeleteServer {
+            server: "drop".to_string(),
+            selected: true,
+        });
+        assert!(app.delete_preview.is_some());
+
+        // プレビュー確認後に外部プロセスがファイルを書き換えた状況を再現
+        let externally_updated = r#"{"mcpServers":{"keep":{"command":"node"},"drop":{"command":"updated-by-editor"},"added":{"command":"bunx"}}}"#;
+        std::fs::write(&path, externally_updated).unwrap();
+
+        // 削除実行は拒否され、ファイルは無変更・選択は解除され最新一覧へ更新される
+        app.update(UiAction::ApplyDelete);
+        let (msg, is_err) = app.status_message.as_ref().unwrap();
+        assert!(*is_err, "{msg}");
+        assert!(
+            msg.contains("確認後に設定ファイルが変更されています"),
+            "{msg}"
+        );
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), externally_updated);
+        assert!(app.delete_selection.is_empty());
+        assert_eq!(
+            app.target_entries[0]
+                .existing_config
+                .as_ref()
+                .and_then(ExistingTargetState::server_count),
+            Some(3)
         );
     }
 }
