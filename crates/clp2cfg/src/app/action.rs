@@ -32,6 +32,8 @@ pub enum UiAction {
     },
     /// プレースホルダー入力欄の値を平文で表示するか
     SetRevealEnv(bool),
+    /// 既存設定タブの機密値（env / headers）を平文で表示するか
+    SetRevealExistingSecrets(bool),
     /// フォーカス獲得時の自動読み取りトグル（次回起動へ永続化される）
     SetAutoRead(bool),
     SetReplaceNpxWithBunx(bool),

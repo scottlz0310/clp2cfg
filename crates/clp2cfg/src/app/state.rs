@@ -110,6 +110,8 @@ pub struct AppState {
     pub auto_read_clipboard: bool,
     /// 入力欄の値を平文で表示するか
     pub reveal_env_inputs: bool,
+    /// 既存設定タブの機密値（env / headers）を平文で表示するか（入力欄のトグルとは独立）
+    pub reveal_existing_secrets: bool,
     /// スニペット内のプレースホルダー env（入力済みのものも含む。入力欄を消さないため）
     placeholder_fields: Vec<EnvRef>,
     /// ミニ入力欄で入力された実値（シークレットを含むためログ・ステータスには出さない）
@@ -143,6 +145,7 @@ impl AppState {
             status_message: None,
             auto_read_clipboard: true,
             reveal_env_inputs: false,
+            reveal_existing_secrets: false,
             placeholder_fields: Vec::new(),
             env_overrides: EnvOverrides::new(),
             last_apply: None,
@@ -193,6 +196,7 @@ impl AppState {
                 }
             }
             UiAction::SetRevealEnv(on) => self.reveal_env_inputs = on,
+            UiAction::SetRevealExistingSecrets(on) => self.reveal_existing_secrets = on,
             UiAction::SetAutoRead(on) => self.auto_read_clipboard = on,
             UiAction::SetReplaceNpxWithBunx(on) => {
                 self.replace_npx_with_bunx = on;
@@ -1657,5 +1661,23 @@ mod tests {
         // Clear で既存設定タブへ戻る
         app.update(UiAction::Clear);
         assert_eq!(app.preview_tab, PreviewTab::ExistingConfig);
+    }
+
+    #[test]
+    fn test_reveal_env_inputs_and_reveal_existing_secrets_are_independent() {
+        let mut app = new_state(Vec::new());
+        assert!(!app.reveal_env_inputs);
+        assert!(!app.reveal_existing_secrets);
+
+        // 左側の入力欄「値を表示」をオンにしても、右側の既存設定はマスクされたまま
+        app.update(UiAction::SetRevealEnv(true));
+        assert!(app.reveal_env_inputs);
+        assert!(!app.reveal_existing_secrets);
+
+        // 左側を戻し、右側の既存設定表示をオンにしても、左側の入力欄は伏せ字のまま
+        app.update(UiAction::SetRevealEnv(false));
+        app.update(UiAction::SetRevealExistingSecrets(true));
+        assert!(!app.reveal_env_inputs);
+        assert!(app.reveal_existing_secrets);
     }
 }

@@ -489,8 +489,11 @@ mod tests {
         app.state
             .update(UiAction::JumpToPreviewServer("s1".to_string()));
         run_headless(&ctx, &mut app);
-        // 平文トグル ON
+        // 入力欄のトグルを ON にしても既存設定はマスクのまま、既存設定専用トグルで平文切替
         app.state.update(UiAction::SetRevealEnv(true));
+        assert!(!app.state.reveal_existing_secrets);
+        run_headless(&ctx, &mut app);
+        app.state.update(UiAction::SetRevealExistingSecrets(true));
         run_headless(&ctx, &mut app);
         // Error ターゲット
         app.state.update(UiAction::SelectTarget(1));

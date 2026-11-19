@@ -21,8 +21,21 @@ pub struct ExistingConfigSnapshot {
     pub masked_json: String,
     /// Pretty-printed JSON with unmasked values.
     pub raw_json: String,
-    /// 0-based inclusive line range for each server in `masked_json` / `raw_json`.
-    pub server_lines: BTreeMap<String, LineRange>,
+    /// 0-based inclusive line range for each server in `masked_json`.
+    pub masked_server_lines: BTreeMap<String, LineRange>,
+    /// 0-based inclusive line range for each server in `raw_json`.
+    pub raw_server_lines: BTreeMap<String, LineRange>,
+}
+
+impl ExistingConfigSnapshot {
+    /// Return the JSON text and matching per-server line ranges for the requested visibility mode.
+    pub fn display(&self, reveal_secrets: bool) -> (&str, &BTreeMap<String, LineRange>) {
+        if reveal_secrets {
+            (&self.raw_json, &self.raw_server_lines)
+        } else {
+            (&self.masked_json, &self.masked_server_lines)
+        }
+    }
 }
 
 /// Error types occurring during target AST merge.
@@ -204,7 +217,8 @@ pub fn inspect_existing_json(
             server_names: Vec::new(),
             masked_json: "{}".to_string(),
             raw_json: "{}".to_string(),
-            server_lines: BTreeMap::new(),
+            masked_server_lines: BTreeMap::new(),
+            raw_server_lines: BTreeMap::new(),
         });
     }
 
@@ -225,18 +239,20 @@ pub fn inspect_existing_json(
 
     let raw_json = serde_json::to_string_pretty(&root)
         .map_err(|e| MergeError::SerializationFailed(e.to_string()))?;
+    let raw_server_lines = scan_server_line_ranges(&raw_json, target_key);
 
     let mut masked_root = root;
     mask_secret_fields(&mut masked_root, target_key);
     let masked_json = serde_json::to_string_pretty(&masked_root)
         .map_err(|e| MergeError::SerializationFailed(e.to_string()))?;
-    let server_lines = scan_server_line_ranges(&masked_json, target_key);
+    let masked_server_lines = scan_server_line_ranges(&masked_json, target_key);
 
     Ok(ExistingConfigSnapshot {
         server_names,
         masked_json,
         raw_json,
-        server_lines,
+        masked_server_lines,
+        raw_server_lines,
     })
 }
 
@@ -1031,8 +1047,10 @@ mod tests {
 
         let snap = inspect_existing_json(ClientTargetKind::Cursor, existing).unwrap();
         assert_eq!(snap.server_names, vec!["local-srv", "remote-srv"]);
-        assert!(snap.server_lines.contains_key("local-srv"));
-        assert!(snap.server_lines.contains_key("remote-srv"));
+        assert!(snap.masked_server_lines.contains_key("local-srv"));
+        assert!(snap.masked_server_lines.contains_key("remote-srv"));
+        assert!(snap.raw_server_lines.contains_key("local-srv"));
+        assert!(snap.raw_server_lines.contains_key("remote-srv"));
 
         // masked_json は env / headers を *** にし、他の値は保持する
         assert!(!snap.masked_json.contains("super-secret-env"));
@@ -1045,6 +1063,34 @@ mod tests {
         // raw_json は実値を保持する
         assert!(snap.raw_json.contains("super-secret-env"));
         assert!(snap.raw_json.contains("secret-token"));
+    }
+
+    #[test]
+    fn test_inspect_existing_json_computes_separate_line_ranges_for_masked_and_raw() {
+        // 先行サーバーの env に複数行オブジェクトがあると、マスク版と平文版で後続サーバーの行位置が異なる
+        let existing = r#"{
+            "mcpServers": {
+                "first": {
+                    "env": {
+                        "NESTED": { "k": "v" }
+                    }
+                },
+                "second": {
+                    "command": "node"
+                }
+            }
+        }"#;
+
+        let snap = inspect_existing_json(ClientTargetKind::Cursor, existing).unwrap();
+        let (masked_text, masked_lines) = snap.display(false);
+        let (raw_text, raw_lines) = snap.display(true);
+
+        assert_ne!(masked_lines["second"], raw_lines["second"]);
+
+        let masked_vec: Vec<&str> = masked_text.lines().collect();
+        let raw_vec: Vec<&str> = raw_text.lines().collect();
+        assert!(masked_vec[masked_lines["second"].start].contains("\"second\""));
+        assert!(raw_vec[raw_lines["second"].start].contains("\"second\""));
     }
 
     #[test]

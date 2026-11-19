@@ -79,7 +79,7 @@ pub fn preview_pane(
     if !is_cli && state.preview_tab == PreviewTab::ExistingConfig {
         let (tab_actions, jumped_seq) = render_existing_config_pane(
             ui,
-            state.reveal_env_inputs,
+            state.reveal_existing_secrets,
             entry.existing_config.as_ref(),
             highlighted_server,
             pending_jump.map(|req| (req.server.as_str(), req.seq)),
@@ -190,7 +190,7 @@ pub fn preview_pane(
 /// 既存設定ファイルと登録済み MCP サーバー一覧の表示（ファイル系ターゲットのみ）
 fn render_existing_config_pane(
     ui: &mut egui::Ui,
-    reveal_env_inputs: bool,
+    reveal_existing_secrets: bool,
     existing: Option<&ExistingTargetState>,
     highlighted_server: Option<&str>,
     pending_jump: Option<(&str, u64)>,
@@ -206,12 +206,12 @@ fn render_existing_config_pane(
                     ))
                     .small(),
                 );
-                let mut reveal = reveal_env_inputs;
+                let mut reveal = reveal_existing_secrets;
                 if ui
                     .checkbox(&mut reveal, "機密値（env / headers）を表示")
                     .changed()
                 {
-                    actions.push(UiAction::SetRevealEnv(reveal));
+                    actions.push(UiAction::SetRevealExistingSecrets(reveal));
                 }
             });
 
@@ -249,7 +249,7 @@ fn render_existing_config_pane(
                     jumped_seq = render_existing_json_view(
                         ui,
                         snapshot,
-                        reveal_env_inputs,
+                        reveal_existing_secrets,
                         highlighted_server,
                         pending_jump,
                     );
@@ -283,22 +283,18 @@ fn render_existing_config_pane(
 fn render_existing_json_view(
     ui: &mut egui::Ui,
     snapshot: &ExistingConfigSnapshot,
-    reveal_env_inputs: bool,
+    reveal_existing_secrets: bool,
     highlighted_server: Option<&str>,
     pending_jump: Option<(&str, u64)>,
 ) -> Option<u64> {
-    let text = if reveal_env_inputs {
-        snapshot.raw_json.as_str()
-    } else {
-        snapshot.masked_json.as_str()
-    };
+    let (text, server_lines) = snapshot.display(reveal_existing_secrets);
     let font_id = egui::TextStyle::Monospace.resolve(ui.style());
     let default_color = ui.visuals().text_color();
 
     let mut layouter = |ui: &egui::Ui, buf: &dyn egui::TextBuffer, wrap_width: f32| {
         let job = build_existing_config_layout_job(
             buf.as_str(),
-            &snapshot.server_lines,
+            server_lines,
             highlighted_server,
             font_id.clone(),
             default_color,
@@ -315,7 +311,7 @@ fn render_existing_json_view(
         .show(ui);
 
     if let Some((server, seq)) = pending_jump {
-        if let Some(range) = snapshot.server_lines.get(server).copied() {
+        if let Some(range) = server_lines.get(server).copied() {
             if let Some((start_char, end_char)) = line_range_char_span(text, range) {
                 let start_rect = output
                     .galley
