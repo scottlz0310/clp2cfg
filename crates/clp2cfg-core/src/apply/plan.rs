@@ -1,11 +1,16 @@
 use super::{ApplyError, TargetIo};
 use crate::delegate::plan::{build_cli_invocations, preview_invocations, CliInvocation};
 use crate::domain::{ClientTarget, McpServersMap, ServerChange, TargetAction};
-use crate::merge::{classify_server_changes, merge_mcp_servers};
+use crate::merge::{
+    classify_server_changes, locate_server_line_ranges, merge_mcp_servers, LineRange,
+};
 use std::collections::BTreeMap;
 
 /// サーバー名ごとの判定
 pub type ServerChanges = BTreeMap<String, ServerChange>;
+
+/// サーバー名ごとのプレビュー JSON 内行範囲（0-based, inclusive）
+pub type ServerLineRanges = BTreeMap<String, LineRange>;
 
 /// How many servers got `change` (the frontends word the summary themselves).
 pub fn count_changes(changes: &ServerChanges, change: ServerChange) -> usize {
@@ -20,6 +25,8 @@ pub enum TargetPlan {
         merged: String,
         /// Per server: new / updated / unchanged.
         changes: ServerChanges,
+        /// Per server: 0-based inclusive line range within `merged`.
+        server_lines: ServerLineRanges,
         /// The file existed before (so a `.bak` will be made), as opposed to being created.
         had_original: bool,
     },
@@ -43,6 +50,22 @@ impl TargetPlan {
             Self::Cli { .. } => None,
         }
     }
+
+    /// The per-server line ranges in the merged preview, for file targets.
+    pub fn server_lines(&self) -> Option<&ServerLineRanges> {
+        match self {
+            Self::File { server_lines, .. } => Some(server_lines),
+            Self::Cli { .. } => None,
+        }
+    }
+
+    /// The planned official-CLI invocations, for CLI targets.
+    pub fn invocations(&self) -> Option<&[CliInvocation]> {
+        match self {
+            Self::File { .. } => None,
+            Self::Cli { invocations } => Some(invocations),
+        }
+    }
 }
 
 /// Work out what applying `servers` to `target` would do, without changing anything.
@@ -61,9 +84,11 @@ pub fn plan_target(
                     })?;
             let merged = merge_mcp_servers(target.kind, existing.as_deref(), servers)?;
             let changes = classify_server_changes(target.kind, existing.as_deref(), servers)?;
+            let server_lines = locate_server_line_ranges(target.kind, &merged)?;
             Ok(TargetPlan::File {
                 merged,
                 changes,
+                server_lines,
                 had_original: existing.is_some(),
             })
         }

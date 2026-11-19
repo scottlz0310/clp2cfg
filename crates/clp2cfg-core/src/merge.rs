@@ -5,6 +5,13 @@ use serde_json::{Map, Value};
 use std::collections::BTreeMap;
 use thiserror::Error;
 
+/// 0-based inclusive line range (`start..=end`) in a pretty-printed JSON document.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LineRange {
+    pub start: usize,
+    pub end: usize,
+}
+
 /// Error types occurring during target AST merge.
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum MergeError {
@@ -160,6 +167,224 @@ pub fn merge_mcp_servers(
 
     // 4. Serialize with pretty printing (2 spaces)
     serde_json::to_string_pretty(&root).map_err(|e| MergeError::SerializationFailed(e.to_string()))
+}
+
+/// Locate the 0-based inclusive line range for each server entry under the target's `servers_key`
+/// in a serialized JSON document (such as the output of [`merge_mcp_servers`]).
+pub fn locate_server_line_ranges(
+    kind: ClientTargetKind,
+    json: &str,
+) -> Result<BTreeMap<String, LineRange>, MergeError> {
+    let target_key = servers_key(kind)?;
+    Ok(scan_server_line_ranges(json, target_key))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ContainerState {
+    Object {
+        is_root: bool,
+        is_target_servers: bool,
+        expecting_key: bool,
+        awaiting_target_value: bool,
+    },
+    Array,
+}
+
+fn scan_server_line_ranges(json: &str, target_key: &str) -> BTreeMap<String, LineRange> {
+    let mut ranges = BTreeMap::new();
+    let bytes = json.as_bytes();
+    let len = bytes.len();
+    let mut i = 0;
+    let mut line = 0usize;
+    let mut stack: Vec<ContainerState> = Vec::new();
+    let mut current_server: Option<(String, usize, usize)> = None;
+
+    while i < len {
+        let b = bytes[i];
+        match b {
+            b' ' | b'\t' | b'\r' => {
+                i += 1;
+            }
+            b'\n' => {
+                line += 1;
+                i += 1;
+            }
+            b'"' => {
+                let start = i;
+                let start_line = line;
+                i += 1;
+                while i < len {
+                    match bytes[i] {
+                        b'\\' => {
+                            i = (i + 2).min(len);
+                        }
+                        b'"' => {
+                            i += 1;
+                            break;
+                        }
+                        b'\n' => {
+                            line += 1;
+                            i += 1;
+                        }
+                        _ => {
+                            i += 1;
+                        }
+                    }
+                }
+                let raw = &json[start..i];
+                if let Some(ContainerState::Object {
+                    is_root,
+                    is_target_servers,
+                    expecting_key,
+                    awaiting_target_value,
+                }) = stack.last_mut()
+                {
+                    if *expecting_key {
+                        *expecting_key = false;
+                        if *is_root {
+                            if let Ok(decoded) = serde_json::from_str::<String>(raw) {
+                                *awaiting_target_value = decoded == target_key;
+                            }
+                        } else if *is_target_servers {
+                            if let Ok(decoded) = serde_json::from_str::<String>(raw) {
+                                current_server = Some((decoded, start_line, line));
+                            }
+                        }
+                    } else {
+                        *awaiting_target_value = false;
+                        if *is_target_servers {
+                            if let Some((_, _, end_line)) = current_server.as_mut() {
+                                *end_line = line;
+                            }
+                        }
+                    }
+                }
+            }
+            b'{' => {
+                let is_root = stack.is_empty();
+                let is_target_servers = matches!(
+                    stack.last(),
+                    Some(ContainerState::Object {
+                        is_root: true,
+                        awaiting_target_value: true,
+                        ..
+                    })
+                );
+                if let Some(ContainerState::Object {
+                    awaiting_target_value,
+                    ..
+                }) = stack.last_mut()
+                {
+                    *awaiting_target_value = false;
+                }
+                stack.push(ContainerState::Object {
+                    is_root,
+                    is_target_servers,
+                    expecting_key: true,
+                    awaiting_target_value: false,
+                });
+                i += 1;
+            }
+            b'}' => {
+                let popped = stack.pop();
+                if matches!(
+                    popped,
+                    Some(ContainerState::Object {
+                        is_target_servers: true,
+                        ..
+                    })
+                ) {
+                    if let Some((name, start, end)) = current_server.take() {
+                        ranges.insert(name, LineRange { start, end });
+                    }
+                } else if matches!(
+                    stack.last(),
+                    Some(ContainerState::Object {
+                        is_target_servers: true,
+                        ..
+                    })
+                ) {
+                    if let Some((_, _, end_line)) = current_server.as_mut() {
+                        *end_line = line;
+                    }
+                }
+                i += 1;
+            }
+            b'[' => {
+                if let Some(ContainerState::Object {
+                    awaiting_target_value,
+                    ..
+                }) = stack.last_mut()
+                {
+                    *awaiting_target_value = false;
+                }
+                stack.push(ContainerState::Array);
+                i += 1;
+            }
+            b']' => {
+                stack.pop();
+                if matches!(
+                    stack.last(),
+                    Some(ContainerState::Object {
+                        is_target_servers: true,
+                        ..
+                    })
+                ) {
+                    if let Some((_, _, end_line)) = current_server.as_mut() {
+                        *end_line = line;
+                    }
+                }
+                i += 1;
+            }
+            b',' => {
+                if let Some(ContainerState::Object {
+                    is_target_servers,
+                    expecting_key,
+                    awaiting_target_value,
+                    ..
+                }) = stack.last_mut()
+                {
+                    if *is_target_servers {
+                        if let Some((name, start, end)) = current_server.take() {
+                            ranges.insert(name, LineRange { start, end });
+                        }
+                    }
+                    *expecting_key = true;
+                    *awaiting_target_value = false;
+                }
+                i += 1;
+            }
+            b':' => {
+                i += 1;
+            }
+            _ => {
+                // Primitive token (number, true, false, null)
+                while i < len
+                    && !matches!(
+                        bytes[i],
+                        b' ' | b'\t' | b'\r' | b'\n' | b',' | b'}' | b']' | b':'
+                    )
+                {
+                    i += 1;
+                }
+                if let Some(ContainerState::Object {
+                    is_target_servers,
+                    awaiting_target_value,
+                    ..
+                }) = stack.last_mut()
+                {
+                    *awaiting_target_value = false;
+                    if *is_target_servers {
+                        if let Some((_, _, end_line)) = current_server.as_mut() {
+                            *end_line = line;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    ranges
 }
 
 #[cfg(test)]
@@ -626,6 +851,74 @@ mod tests {
                 server: "ws".to_string(),
                 transport: "websocket".to_string(),
             }
+        );
+    }
+
+    #[test]
+    fn test_locate_server_line_ranges_handles_nested_and_special_keys() {
+        let existing = r#"{
+            "nested": {
+                "mcpServers": {
+                    "decoy": { "command": "fake" }
+                }
+            },
+            "mcpServers": {
+                "empty-srv": {},
+                "escaped\"key": {
+                    "command": "node",
+                    "args": ["{not a block}", "line\\n"]
+                }
+            }
+        }"#;
+        let servers = McpServersMap::from([
+            ("日本語-srv".to_string(), create_dummy_server("uvx")),
+            ("new-srv".to_string(), create_dummy_server("bunx")),
+        ]);
+
+        let merged = merge_mcp_servers(ClientTargetKind::Cursor, Some(existing), &servers).unwrap();
+        let ranges = locate_server_line_ranges(ClientTargetKind::Cursor, &merged).unwrap();
+        let lines: Vec<&str> = merged.lines().collect();
+
+        // ネストした別オブジェクト内の decoy は含まれない
+        assert!(!ranges.contains_key("decoy"));
+
+        for key in ["empty-srv", "escaped\"key", "日本語-srv", "new-srv"] {
+            let range = ranges
+                .get(key)
+                .unwrap_or_else(|| panic!("missing line range for {key}"));
+            let encoded_key = serde_json::to_string(key).unwrap();
+            assert!(
+                lines[range.start].trim_start().starts_with(&encoded_key),
+                "start line mismatch for {key}: {}",
+                lines[range.start]
+            );
+            let end_trimmed = lines[range.end].trim();
+            assert!(
+                end_trimmed.ends_with('}') || end_trimmed.ends_with("},"),
+                "end line mismatch for {key}: {end_trimmed}"
+            );
+        }
+
+        // 1 行の空オブジェクトは start == end
+        let empty_range = ranges["empty-srv"];
+        assert_eq!(empty_range.start, empty_range.end);
+    }
+
+    #[test]
+    fn test_locate_server_line_ranges_per_target_key_and_rejects_cli() {
+        let servers = McpServersMap::from([("srv".to_string(), create_dummy_server("node"))]);
+        for kind in [ClientTargetKind::VsCode, ClientTargetKind::Zed] {
+            let merged = merge_mcp_servers(kind, None, &servers).unwrap();
+            let ranges = locate_server_line_ranges(kind, &merged).unwrap();
+            let range = ranges["srv"];
+            let lines: Vec<&str> = merged.lines().collect();
+            assert!(lines[range.start].contains("\"srv\""), "{kind:?}");
+            assert!(range.end > range.start, "{kind:?}");
+        }
+
+        assert_eq!(
+            locate_server_line_ranges(ClientTargetKind::ClaudeCli, "{}"),
+            Err(MergeError::NotFileTarget)
         );
     }
 }

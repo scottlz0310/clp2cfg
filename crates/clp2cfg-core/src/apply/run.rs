@@ -92,6 +92,7 @@ fn apply_target(
             merged,
             changes,
             had_original,
+            ..
         } => {
             let written = match mode {
                 Mode::DryRun => None,

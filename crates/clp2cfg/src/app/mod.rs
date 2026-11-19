@@ -8,7 +8,7 @@ mod view;
 pub use action::UiAction;
 pub use clipboard::ArboardClipboard;
 pub use ports::ClipboardSource;
-pub use state::{AppState, StartupOptions, TargetEntry};
+pub use state::{AppState, PreviewJumpRequest, StartupOptions, TargetEntry};
 pub use system::load_app_icon;
 
 use clp2cfg_core::apply::{SystemCatalog, SystemIo, TargetCatalog, TargetIo};
@@ -422,6 +422,45 @@ mod tests {
         assert!(app.state.undo_hint().is_some());
 
         let ctx = egui::Context::default();
+        run_headless(&ctx, &mut app);
+    }
+
+    #[test]
+    fn test_preview_jump_renders_for_both_file_and_cli_targets() {
+        let temp = tempdir().unwrap();
+        let path = temp.path().join("mcp.json");
+        std::fs::write(
+            &path,
+            r#"{"mcpServers":{"existing":{"command":"node"},"upd":{"command":"old"}}}"#,
+        )
+        .unwrap();
+        let mut cli = ClientTarget::new_cli(ClientTargetKind::ClaudeCli, None);
+        cli.path = std::path::PathBuf::from("claude");
+
+        let mut app = new_app(vec![
+            clp2cfg_core::discovery::file_target(ClientTargetKind::Cursor, path),
+            cli,
+        ]);
+        app.state.auto_read_clipboard = false;
+        app.state.update(UiAction::SetInput(
+            r#"{"upd":{"command":"new"},"fresh":{"command":"uvx"}}"#.to_string(),
+        ));
+
+        let ctx = egui::Context::default();
+
+        // ファイル系ターゲットへのジャンプ要求と描画
+        app.state
+            .update(UiAction::JumpToPreviewServer("fresh".to_string()));
+        run_headless(&ctx, &mut app);
+        // 2 フレーム目は処理済み seq のまま通常描画される
+        run_headless(&ctx, &mut app);
+
+        // CLI ターゲットへ切替 → ジャンプ要求と描画
+        app.state.update(UiAction::SelectTarget(1));
+        assert!(app.state.preview_jump_request.is_none());
+        app.state
+            .update(UiAction::JumpToPreviewServer("upd".to_string()));
+        run_headless(&ctx, &mut app);
         run_headless(&ctx, &mut app);
     }
 }

@@ -7,9 +7,20 @@ use crate::domain::{
     RemoteTransportKind, ServerTransport,
 };
 
+/// Kind of CLI operation represented by a [`CliInvocation`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CliOperation {
+    Remove,
+    Add,
+}
+
 /// A single subprocess invocation of a client's official CLI.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CliInvocation {
+    /// Target MCP server name this invocation acts on.
+    pub server_name: String,
+    /// Whether this command removes or adds the server.
+    pub operation: CliOperation,
     pub program: String,
     pub args: Vec<String>,
     /// Failure is tolerated (e.g. `remove` of a server that does not exist yet).
@@ -53,8 +64,16 @@ impl SecretArg {
 }
 
 impl CliInvocation {
-    pub(super) fn new(program: &str, args: Vec<String>, ignore_failure: bool) -> Self {
+    pub(super) fn new(
+        server_name: &str,
+        operation: CliOperation,
+        program: &str,
+        args: Vec<String>,
+        ignore_failure: bool,
+    ) -> Self {
         Self {
+            server_name: server_name.to_string(),
+            operation,
             program: program.to_string(),
             args,
             ignore_failure,
@@ -219,9 +238,21 @@ pub fn build_cli_invocations(
     for (name, config) in servers {
         let add = add_args(spec, name, config)?;
         if spec.remove_before_add {
-            invocations.push(CliInvocation::new(program, remove_args(spec, name), true));
+            invocations.push(CliInvocation::new(
+                name,
+                CliOperation::Remove,
+                program,
+                remove_args(spec, name),
+                true,
+            ));
         }
-        invocations.push(CliInvocation::new(program, add, false));
+        invocations.push(CliInvocation::new(
+            name,
+            CliOperation::Add,
+            program,
+            add,
+            false,
+        ));
     }
     Ok(invocations)
 }
@@ -407,8 +438,12 @@ mod tests {
     fn test_build_claude_uses_user_scope_and_short_env_flag() {
         let inv = build_cli_invocations(ClientTargetKind::ClaudeCli, "claude", &servers()).unwrap();
         assert_eq!(inv.len(), 2);
+        assert_eq!(inv[0].server_name, "my-srv");
+        assert_eq!(inv[0].operation, CliOperation::Remove);
         assert!(inv[0].ignore_failure);
         assert_eq!(inv[0].display(), "claude mcp remove --scope user my-srv");
+        assert_eq!(inv[1].server_name, "my-srv");
+        assert_eq!(inv[1].operation, CliOperation::Add);
         assert_eq!(
             inv[1].display(),
             "claude mcp add --scope user my-srv -e 'API_KEY=a b' -- npx -y pkg"
@@ -453,7 +488,13 @@ mod tests {
         ];
 
         for (args, plain, redacted) in cases {
-            let inv = CliInvocation::new("p", args.iter().map(|a| a.to_string()).collect(), false);
+            let inv = CliInvocation::new(
+                "n",
+                CliOperation::Add,
+                "p",
+                args.iter().map(|a| a.to_string()).collect(),
+                false,
+            );
             assert_eq!(inv.display(), plain);
             assert_eq!(inv.display_redacted(), redacted);
         }
@@ -462,6 +503,8 @@ mod tests {
     #[test]
     fn test_display_redacted_masks_headers_too() {
         let inv = CliInvocation::new(
+            "api",
+            CliOperation::Add,
             "claude",
             vec![
                 "mcp".into(),
@@ -484,6 +527,8 @@ mod tests {
     #[test]
     fn test_redact_text_masks_secrets_safely() {
         let inv = CliInvocation::new(
+            "api",
+            CliOperation::Add,
             "claude",
             vec![
                 "mcp".into(),
