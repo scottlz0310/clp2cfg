@@ -12,6 +12,32 @@ pub struct LineRange {
     pub end: usize,
 }
 
+/// Snapshot of an existing configuration file for inspection in the UI.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExistingConfigSnapshot {
+    /// Registered MCP server names under the target's `servers_key`.
+    pub server_names: Vec<String>,
+    /// Pretty-printed JSON with `env` / `headers` values masked as `***`.
+    pub masked_json: String,
+    /// Pretty-printed JSON with unmasked values.
+    pub raw_json: String,
+    /// 0-based inclusive line range for each server in `masked_json`.
+    pub masked_server_lines: BTreeMap<String, LineRange>,
+    /// 0-based inclusive line range for each server in `raw_json`.
+    pub raw_server_lines: BTreeMap<String, LineRange>,
+}
+
+impl ExistingConfigSnapshot {
+    /// Return the JSON text and matching per-server line ranges for the requested visibility mode.
+    pub fn display(&self, reveal_secrets: bool) -> (&str, &BTreeMap<String, LineRange>) {
+        if reveal_secrets {
+            (&self.raw_json, &self.raw_server_lines)
+        } else {
+            (&self.masked_json, &self.masked_server_lines)
+        }
+    }
+}
+
 /// Error types occurring during target AST merge.
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum MergeError {
@@ -177,6 +203,80 @@ pub fn locate_server_line_ranges(
 ) -> Result<BTreeMap<String, LineRange>, MergeError> {
     let target_key = servers_key(kind)?;
     Ok(scan_server_line_ranges(json, target_key))
+}
+
+/// Parse an existing configuration file and return registered MCP server names along with
+/// masked (`env` / `headers` values replaced with `***`) and raw pretty-printed JSON previews.
+pub fn inspect_existing_json(
+    kind: ClientTargetKind,
+    existing_json: &str,
+) -> Result<ExistingConfigSnapshot, MergeError> {
+    let target_key = servers_key(kind)?;
+    if existing_json.trim().is_empty() {
+        return Ok(ExistingConfigSnapshot {
+            server_names: Vec::new(),
+            masked_json: "{}".to_string(),
+            raw_json: "{}".to_string(),
+            masked_server_lines: BTreeMap::new(),
+            raw_server_lines: BTreeMap::new(),
+        });
+    }
+
+    let root = parse_existing(kind, existing_json)?;
+    let root_map = root.as_object().ok_or(MergeError::RootNotObject)?;
+    let server_names = match root_map.get(target_key) {
+        None => Vec::new(),
+        Some(value) => {
+            let obj = value.as_object().ok_or_else(|| {
+                MergeError::InvalidExistingJson(format!(
+                    "'{}' field exists but is not an object",
+                    target_key
+                ))
+            })?;
+            obj.keys().cloned().collect()
+        }
+    };
+
+    let raw_json = serde_json::to_string_pretty(&root)
+        .map_err(|e| MergeError::SerializationFailed(e.to_string()))?;
+    let raw_server_lines = scan_server_line_ranges(&raw_json, target_key);
+
+    let mut masked_root = root;
+    mask_secret_fields(&mut masked_root, target_key);
+    let masked_json = serde_json::to_string_pretty(&masked_root)
+        .map_err(|e| MergeError::SerializationFailed(e.to_string()))?;
+    let masked_server_lines = scan_server_line_ranges(&masked_json, target_key);
+
+    Ok(ExistingConfigSnapshot {
+        server_names,
+        masked_json,
+        raw_json,
+        masked_server_lines,
+        raw_server_lines,
+    })
+}
+
+fn mask_secret_fields(root: &mut Value, target_key: &str) {
+    let Some(servers) = root
+        .as_object_mut()
+        .and_then(|map| map.get_mut(target_key))
+        .and_then(Value::as_object_mut)
+    else {
+        return;
+    };
+
+    for server in servers.values_mut() {
+        let Some(server_obj) = server.as_object_mut() else {
+            continue;
+        };
+        for field in ["env", "headers"] {
+            if let Some(secret_map) = server_obj.get_mut(field).and_then(Value::as_object_mut) {
+                for val in secret_map.values_mut() {
+                    *val = Value::String("***".to_string());
+                }
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -918,6 +1018,101 @@ mod tests {
 
         assert_eq!(
             locate_server_line_ranges(ClientTargetKind::ClaudeCli, "{}"),
+            Err(MergeError::NotFileTarget)
+        );
+    }
+
+    #[test]
+    fn test_inspect_existing_json_masks_env_and_headers_and_preserves_other_fields() {
+        let existing = r#"{
+            "theme": "dark",
+            "mcpServers": {
+                "local-srv": {
+                    "command": "node",
+                    "args": ["index.js"],
+                    "env": {
+                        "API_KEY": "super-secret-env",
+                        "EMPTY": ""
+                    }
+                },
+                "remote-srv": {
+                    "type": "http",
+                    "url": "https://example.com/mcp",
+                    "headers": {
+                        "Authorization": "Bearer secret-token"
+                    }
+                }
+            }
+        }"#;
+
+        let snap = inspect_existing_json(ClientTargetKind::Cursor, existing).unwrap();
+        assert_eq!(snap.server_names, vec!["local-srv", "remote-srv"]);
+        assert!(snap.masked_server_lines.contains_key("local-srv"));
+        assert!(snap.masked_server_lines.contains_key("remote-srv"));
+        assert!(snap.raw_server_lines.contains_key("local-srv"));
+        assert!(snap.raw_server_lines.contains_key("remote-srv"));
+
+        // masked_json は env / headers を *** にし、他の値は保持する
+        assert!(!snap.masked_json.contains("super-secret-env"));
+        assert!(!snap.masked_json.contains("secret-token"));
+        assert!(snap.masked_json.contains(r#""API_KEY": "***""#));
+        assert!(snap.masked_json.contains(r#""Authorization": "***""#));
+        assert!(snap.masked_json.contains(r#""theme": "dark""#));
+        assert!(snap.masked_json.contains(r#""command": "node""#));
+
+        // raw_json は実値を保持する
+        assert!(snap.raw_json.contains("super-secret-env"));
+        assert!(snap.raw_json.contains("secret-token"));
+    }
+
+    #[test]
+    fn test_inspect_existing_json_computes_separate_line_ranges_for_masked_and_raw() {
+        // 先行サーバーの env に複数行オブジェクトがあると、マスク版と平文版で後続サーバーの行位置が異なる
+        let existing = r#"{
+            "mcpServers": {
+                "first": {
+                    "env": {
+                        "NESTED": { "k": "v" }
+                    }
+                },
+                "second": {
+                    "command": "node"
+                }
+            }
+        }"#;
+
+        let snap = inspect_existing_json(ClientTargetKind::Cursor, existing).unwrap();
+        let (masked_text, masked_lines) = snap.display(false);
+        let (raw_text, raw_lines) = snap.display(true);
+
+        assert_ne!(masked_lines["second"], raw_lines["second"]);
+
+        let masked_vec: Vec<&str> = masked_text.lines().collect();
+        let raw_vec: Vec<&str> = raw_text.lines().collect();
+        assert!(masked_vec[masked_lines["second"].start].contains("\"second\""));
+        assert!(raw_vec[raw_lines["second"].start].contains("\"second\""));
+    }
+
+    #[test]
+    fn test_inspect_existing_json_supports_zed_jsonc_and_empty_and_errors() {
+        let zed = "{\n  // comment\n  \"context_servers\": {\n    \"z\": { \"command\": \"uvx\", },\n  },\n}";
+        let snap = inspect_existing_json(ClientTargetKind::Zed, zed).unwrap();
+        assert_eq!(snap.server_names, vec!["z"]);
+
+        let empty = inspect_existing_json(ClientTargetKind::Cursor, "   ").unwrap();
+        assert!(empty.server_names.is_empty());
+        assert_eq!(empty.masked_json, "{}");
+
+        assert!(matches!(
+            inspect_existing_json(ClientTargetKind::Cursor, "{ broken"),
+            Err(MergeError::InvalidExistingJson(_))
+        ));
+        assert!(matches!(
+            inspect_existing_json(ClientTargetKind::Cursor, "[]"),
+            Err(MergeError::RootNotObject)
+        ));
+        assert_eq!(
+            inspect_existing_json(ClientTargetKind::CodexCli, "{}"),
             Err(MergeError::NotFileTarget)
         );
     }

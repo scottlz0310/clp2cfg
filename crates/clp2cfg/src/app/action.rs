@@ -2,6 +2,15 @@
 
 use clp2cfg_core::snippet::placeholder::EnvRef;
 
+/// 右ペインのプレビュー表示モード（ファイル系ターゲットのみ切替可能）
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PreviewTab {
+    /// スニペットのマージ結果プレビュー
+    MergePreview,
+    /// 現在の既存設定ファイルと登録済み MCP サーバー一覧
+    ExistingConfig,
+}
+
 /// Every change a view asks of [`super::AppState`]. Views only read the state and return these;
 /// the window applies them at the end of the frame.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -23,6 +32,8 @@ pub enum UiAction {
     },
     /// プレースホルダー入力欄の値を平文で表示するか
     SetRevealEnv(bool),
+    /// 既存設定タブの機密値（env / headers）を平文で表示するか
+    SetRevealExistingSecrets(bool),
     /// フォーカス獲得時の自動読み取りトグル（次回起動へ永続化される）
     SetAutoRead(bool),
     SetReplaceNpxWithBunx(bool),
@@ -40,4 +51,6 @@ pub enum UiAction {
     Undo,
     /// プレビュー内の指定サーバー箇所へスクロールジャンプする
     JumpToPreviewServer(String),
+    /// 右ペインの表示タブ（マージプレビュー / 既存設定）を切り替える
+    SetPreviewTab(PreviewTab),
 }

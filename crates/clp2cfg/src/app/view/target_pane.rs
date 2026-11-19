@@ -1,5 +1,6 @@
 use super::preview_pane::preview_pane;
 use crate::app::{AppState, TargetEntry, UiAction};
+use clp2cfg_core::apply::ExistingTargetState;
 use clp2cfg_core::domain::TargetAction;
 
 /// ターゲット一覧が右ペインの高さに占める上限の割合（残りは差分プレビューに使う）
@@ -52,7 +53,10 @@ fn target_row(
             actions.push(UiAction::SetTargetSelected { idx, selected });
         }
 
-        ui.label(target_badge(entry));
+        let badge = ui.label(target_badge(entry));
+        if let Some(ExistingTargetState::Error(err)) = &entry.existing_config {
+            badge.on_hover_text(err);
+        }
 
         let text = egui::RichText::new(&entry.target.name);
         let text = if is_active { text.strong() } else { text };
@@ -85,7 +89,7 @@ fn target_row(
     actions
 }
 
-/// 種別と存在の表示（`[既存]` / `[新規]` / `[CLI検出]` / `[CLI未検出]`）
+/// 種別と存在・登録件数の表示（`[既存 N件]` / `[既存(読取エラー)]` / `[新規]` / `[CLI検出]` / `[CLI未検出]`）
 fn target_badge(entry: &TargetEntry) -> egui::RichText {
     let exists = entry.target.exists;
     let is_cli = entry.target.kind.action() == TargetAction::CliCommand;
@@ -93,9 +97,21 @@ fn target_badge(entry: &TargetEntry) -> egui::RichText {
         egui::RichText::new("[CLI検出]").color(egui::Color32::LIGHT_GREEN)
     } else if is_cli {
         egui::RichText::new("[CLI未検出]").color(egui::Color32::GRAY)
-    } else if exists {
-        egui::RichText::new("[既存]").color(egui::Color32::LIGHT_GREEN)
     } else {
-        egui::RichText::new("[新規]").color(egui::Color32::GRAY)
+        match &entry.existing_config {
+            Some(ExistingTargetState::Loaded(snapshot)) => {
+                egui::RichText::new(format!("[既存 {}件]", snapshot.server_names.len()))
+                    .color(egui::Color32::LIGHT_GREEN)
+            }
+            Some(ExistingTargetState::Error(_)) => {
+                egui::RichText::new("[既存(読取エラー)]").color(egui::Color32::LIGHT_RED)
+            }
+            Some(ExistingTargetState::Missing) | None if exists => {
+                egui::RichText::new("[既存]").color(egui::Color32::LIGHT_GREEN)
+            }
+            Some(ExistingTargetState::Missing) | None => {
+                egui::RichText::new("[新規]").color(egui::Color32::GRAY)
+            }
+        }
     }
 }

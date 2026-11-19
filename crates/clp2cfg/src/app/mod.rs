@@ -5,7 +5,7 @@ mod state;
 mod system;
 mod view;
 
-pub use action::UiAction;
+pub use action::{PreviewTab, UiAction};
 pub use clipboard::ArboardClipboard;
 pub use ports::ClipboardSource;
 pub use state::{AppState, PreviewJumpRequest, StartupOptions, TargetEntry};
@@ -461,6 +461,45 @@ mod tests {
         app.state
             .update(UiAction::JumpToPreviewServer("upd".to_string()));
         run_headless(&ctx, &mut app);
+        run_headless(&ctx, &mut app);
+    }
+
+    #[test]
+    fn test_existing_config_tab_renders_loaded_missing_error_and_reveal_toggle() {
+        let temp = tempdir().unwrap();
+        let ok_path = temp.path().join("ok.json");
+        std::fs::write(
+            &ok_path,
+            r#"{"mcpServers":{"s1":{"command":"node","env":{"KEY":"secret-val"}}}}"#,
+        )
+        .unwrap();
+        let bad_path = temp.path().join("bad.json");
+        std::fs::write(&bad_path, "{ broken").unwrap();
+        let missing_path = temp.path().join("missing.json");
+
+        let mut app = new_app(vec![
+            clp2cfg_core::discovery::file_target(ClientTargetKind::Cursor, ok_path),
+            clp2cfg_core::discovery::file_target(ClientTargetKind::Cursor, bad_path),
+            clp2cfg_core::discovery::file_target(ClientTargetKind::Cursor, missing_path),
+        ]);
+        app.state.auto_read_clipboard = false;
+
+        let ctx = egui::Context::default();
+        // Loaded（デフォルトマスク + ジャンプ）
+        app.state
+            .update(UiAction::JumpToPreviewServer("s1".to_string()));
+        run_headless(&ctx, &mut app);
+        // 入力欄のトグルを ON にしても既存設定はマスクのまま、既存設定専用トグルで平文切替
+        app.state.update(UiAction::SetRevealEnv(true));
+        assert!(!app.state.reveal_existing_secrets);
+        run_headless(&ctx, &mut app);
+        app.state.update(UiAction::SetRevealExistingSecrets(true));
+        run_headless(&ctx, &mut app);
+        // Error ターゲット
+        app.state.update(UiAction::SelectTarget(1));
+        run_headless(&ctx, &mut app);
+        // Missing ターゲット
+        app.state.update(UiAction::SelectTarget(2));
         run_headless(&ctx, &mut app);
     }
 }
