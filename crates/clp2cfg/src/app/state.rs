@@ -4,14 +4,16 @@
 use super::action::{PreviewTab, UiAction};
 use super::ports::ClipboardSource;
 use clp2cfg_core::apply::{
-    apply_targets, inspect_target, plan_target, undo_file, Applied, ExistingTargetState, LastApply,
-    Mode, ServerChanges, ServerLineRanges, TargetIo, UndoAction,
+    apply_remove_servers, apply_targets, inspect_target, plan_remove_servers, plan_target,
+    undo_file, Applied, ExistingTargetState, LastApply, Mode, RemovalPlan, ServerChanges,
+    ServerLineRanges, TargetIo, UndoAction,
 };
 use clp2cfg_core::delegate::plan::CliInvocation;
 use clp2cfg_core::domain::{ClientTarget, McpServersMap, ServerChange, TargetAction};
 use clp2cfg_core::snippet::filter::FilterOptions;
 use clp2cfg_core::snippet::pipeline::{prepare, Prepared};
 use clp2cfg_core::snippet::placeholder::{is_placeholder, EnvOverrides, EnvRef};
+use std::collections::BTreeSet;
 
 /// プレビュー内の特定サーバー箇所へのスクロールジャンプ要求
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -100,6 +102,12 @@ pub struct AppState {
     pub selected_target_idx: usize,
     /// 右ペインの表示タブ（マージプレビュー / 既存設定）
     pub preview_tab: PreviewTab,
+    /// 既存設定タブで削除対象として選択中のサーバー名（現在選択中ターゲットに対する選択）
+    pub delete_selection: BTreeSet<String>,
+    /// 削除対象選択時の変更後プレビュー計算結果
+    pub delete_preview: Option<Result<RemovalPlan, String>>,
+    /// 削除選択時に「削除後プレビュー JSON」を表示するか（false なら既存設定上で削除対象を赤ハイライト）
+    pub show_delete_after_preview: bool,
     /// プレビュー内の該当サーバーへのスクロールジャンプ要求
     pub preview_jump_request: Option<PreviewJumpRequest>,
     /// ジャンプ要求の連番カウンタ
@@ -140,6 +148,9 @@ impl AppState {
             target_entries,
             selected_target_idx: 0,
             preview_tab: PreviewTab::ExistingConfig,
+            delete_selection: BTreeSet::new(),
+            delete_preview: None,
+            show_delete_after_preview: false,
             preview_jump_request: None,
             preview_jump_seq: 0,
             status_message: None,
@@ -186,6 +197,7 @@ impl AppState {
                 if idx < self.target_entries.len() {
                     if self.selected_target_idx != idx {
                         self.preview_jump_request = None;
+                        self.clear_delete_selection();
                     }
                     self.selected_target_idx = idx;
                 }
@@ -231,6 +243,22 @@ impl AppState {
                     self.preview_jump_request = None;
                 }
             }
+            UiAction::ToggleDeleteServer { server, selected } => {
+                if selected {
+                    self.delete_selection.insert(server);
+                } else {
+                    self.delete_selection.remove(&server);
+                }
+                self.recompute_delete_preview();
+            }
+            UiAction::ClearDeleteSelection => {
+                self.clear_delete_selection();
+            }
+            UiAction::SetShowDeleteAfterPreview(on) => {
+                self.show_delete_after_preview = on;
+            }
+            UiAction::DryRunDelete => self.apply_delete(true),
+            UiAction::ApplyDelete => self.apply_delete(false),
         }
     }
 
@@ -494,8 +522,11 @@ impl AppState {
         }
 
         // ファイルが変わったので、既存設定とプレビュー・判定を作り直す（ステータスを上書きするので先に行う）
+        let prev_tab = self.preview_tab;
+        self.clear_delete_selection();
         self.refresh_existing_configs();
         self.reparse();
+        self.preview_tab = prev_tab;
 
         let mut message = if failed.is_empty() {
             format!("取り消し完了: {} 件 ({})", done.len(), done.join(", "))
@@ -611,6 +642,99 @@ impl AppState {
                 ),
                 true,
             ));
+        }
+    }
+
+    fn clear_delete_selection(&mut self) {
+        self.delete_selection.clear();
+        self.delete_preview = None;
+        self.show_delete_after_preview = false;
+    }
+
+    fn recompute_delete_preview(&mut self) {
+        if self.delete_selection.is_empty() {
+            self.delete_preview = None;
+            self.show_delete_after_preview = false;
+            return;
+        }
+        let Some(entry) = self.target_entries.get(self.selected_target_idx) else {
+            self.delete_preview = None;
+            return;
+        };
+        self.delete_preview = Some(
+            plan_remove_servers(&entry.target, &self.delete_selection, self.io.as_ref())
+                .map_err(|err| format!("削除プレビュー生成失敗: {err}")),
+        );
+    }
+
+    /// 選択中ファイル系ターゲットから、チェック済み MCP サーバーを削除（または Dry-Run 検証）する
+    fn apply_delete(&mut self, dry_run: bool) {
+        if self.delete_selection.is_empty() {
+            self.status_message =
+                Some(("削除対象のサーバーが選択されていません".to_string(), true));
+            return;
+        }
+        let Some(target) = self
+            .target_entries
+            .get(self.selected_target_idx)
+            .map(|e| e.target.clone())
+        else {
+            self.status_message = Some(("対象ターゲットが選択されていません".to_string(), true));
+            return;
+        };
+
+        let mode = if dry_run { Mode::DryRun } else { Mode::Apply };
+        let prefix = if dry_run { "[Dry-Run] " } else { "" };
+
+        match apply_remove_servers(&target, &self.delete_selection, mode, self.io.as_ref()) {
+            Ok(outcome) => {
+                if outcome.removed.is_empty() {
+                    self.status_message = Some((
+                        format!("{prefix}削除対象のサーバーは既に存在しませんでした"),
+                        false,
+                    ));
+                    if !dry_run {
+                        self.clear_delete_selection();
+                        self.refresh_existing_configs();
+                    }
+                    return;
+                }
+
+                if !dry_run {
+                    if let Some(applied_file) = outcome.written {
+                        self.last_apply = Some(LastApply {
+                            files: vec![applied_file],
+                            cli_targets: Vec::new(),
+                        });
+                    }
+                    let prev_tab = self.preview_tab;
+                    self.clear_delete_selection();
+                    self.refresh_existing_configs();
+                    if self.parsed_config.is_ok() {
+                        self.reparse();
+                        self.preview_tab = prev_tab;
+                    }
+                }
+
+                let action_word = if dry_run {
+                    "削除検証OK"
+                } else {
+                    "削除完了"
+                };
+                self.status_message = Some((
+                    format!(
+                        "{prefix}{action_word}: {} ({} 件: {})",
+                        target.name,
+                        outcome.removed.len(),
+                        outcome.removed.join(", ")
+                    ),
+                    false,
+                ));
+            }
+            Err(err) => {
+                self.status_message =
+                    Some((format!("{prefix}削除失敗: {}: {err}", target.name), true));
+            }
         }
     }
 }
@@ -1679,5 +1803,63 @@ mod tests {
         app.update(UiAction::SetRevealExistingSecrets(true));
         assert!(!app.reveal_env_inputs);
         assert!(app.reveal_existing_secrets);
+    }
+
+    #[test]
+    fn test_delete_servers_preview_dry_run_apply_and_undo() {
+        let temp = tempdir().unwrap();
+        let path = temp.path().join("mcp.json");
+        let original = r#"{
+  "theme": "dark",
+  "mcpServers": {
+    "keep": { "command": "node" },
+    "drop": { "command": "uvx" }
+  }
+}"#;
+        std::fs::write(&path, original).unwrap();
+        let target = clp2cfg_core::discovery::file_target(ClientTargetKind::Cursor, path.clone());
+        let mut app = new_state(vec![target]);
+
+        // 削除対象を選択するとプレビューが計算される
+        app.update(UiAction::ToggleDeleteServer {
+            server: "drop".to_string(),
+            selected: true,
+        });
+        assert!(app.delete_selection.contains("drop"));
+        let preview = app.delete_preview.as_ref().unwrap().as_ref().unwrap();
+        assert_eq!(preview.removed, vec!["drop"]);
+        assert!(preview.masked_json.contains("keep") && !preview.masked_json.contains("drop"));
+
+        // Dry-Run はファイルを変更しない
+        app.update(UiAction::DryRunDelete);
+        assert!(app.status_message.as_ref().unwrap().0.contains("[Dry-Run]"));
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
+
+        // 削除適用でファイル更新 + .bak 作成 + 件数が 1 件に追従 + Undo 可能
+        app.update(UiAction::ApplyDelete);
+        assert!(!app.status_message.as_ref().unwrap().1);
+        assert!(app.delete_selection.is_empty());
+        assert!(app.undo_hint().is_some());
+        assert!(clp2cfg_core::writer::backup_path_for(&path).exists());
+        assert_eq!(
+            app.target_entries[0]
+                .existing_config
+                .as_ref()
+                .and_then(ExistingTargetState::server_count),
+            Some(1)
+        );
+        let after = std::fs::read_to_string(&path).unwrap();
+        assert!(after.contains("keep") && !after.contains("drop"));
+
+        // Undo で元のファイルへ復元され、件数も 2 件に戻る
+        app.update(UiAction::Undo);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
+        assert_eq!(
+            app.target_entries[0]
+                .existing_config
+                .as_ref()
+                .and_then(ExistingTargetState::server_count),
+            Some(2)
+        );
     }
 }

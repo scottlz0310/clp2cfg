@@ -3,9 +3,9 @@ use crate::delegate::plan::{build_cli_invocations, preview_invocations, CliInvoc
 use crate::domain::{ClientTarget, McpServersMap, ServerChange, TargetAction};
 use crate::merge::{
     classify_server_changes, inspect_existing_json, locate_server_line_ranges, merge_mcp_servers,
-    ExistingConfigSnapshot, LineRange,
+    remove_mcp_servers, ExistingConfigSnapshot, LineRange, MergeError, RemoveResult,
 };
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// サーバー名ごとの判定
 pub type ServerChanges = BTreeMap<String, ServerChange>;
@@ -110,6 +110,32 @@ pub fn inspect_target(target: &ClientTarget, io: &dyn TargetIo) -> Option<Existi
             }
         },
     }
+}
+
+/// Plan for removing selected MCP servers from one file target.
+pub type RemovalPlan = RemoveResult;
+
+/// Work out what removing `to_remove` from `target` would do, without changing anything.
+pub fn plan_remove_servers(
+    target: &ClientTarget,
+    to_remove: &BTreeSet<String>,
+    io: &dyn TargetIo,
+) -> Result<RemovalPlan, ApplyError> {
+    if target.kind.action() != TargetAction::FileMerge {
+        return Err(ApplyError::Merge(MergeError::NotFileTarget));
+    }
+    let existing = io
+        .read_config(&target.path)
+        .map_err(|source| ApplyError::ReadConfig {
+            path: target.path.clone(),
+            source,
+        })?;
+    let Some(content) = existing else {
+        return Err(ApplyError::Merge(MergeError::InvalidExistingJson(
+            "Configuration file does not exist".to_string(),
+        )));
+    };
+    Ok(remove_mcp_servers(target.kind, &content, to_remove)?)
 }
 
 /// Work out what applying `servers` to `target` would do, without changing anything.

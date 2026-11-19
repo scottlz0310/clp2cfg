@@ -15,8 +15,10 @@ mod undo;
 pub use error::ApplyError;
 pub use io::{SystemCatalog, SystemIo, TargetCatalog, TargetIo};
 pub use plan::{
-    count_changes, inspect_target, plan_target, ExistingTargetState, ServerChanges,
-    ServerLineRanges, TargetPlan,
+    count_changes, inspect_target, plan_remove_servers, plan_target, ExistingTargetState,
+    RemovalPlan, ServerChanges, ServerLineRanges, TargetPlan,
 };
-pub use run::{apply_targets, Applied, ApplyOutcome, Mode, TargetOutcome};
+pub use run::{
+    apply_remove_servers, apply_targets, Applied, ApplyOutcome, Mode, RemovalOutcome, TargetOutcome,
+};
 pub use undo::{undo_file, AppliedFile, LastApply, UndoAction, UndoError};

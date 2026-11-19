@@ -3,7 +3,7 @@ use clp2cfg_core::apply::{count_changes, ExistingTargetState, ServerChanges, Ser
 use clp2cfg_core::delegate::plan::{CliInvocation, CliOperation};
 use clp2cfg_core::domain::{ServerChange, TargetAction};
 use clp2cfg_core::merge::{ExistingConfigSnapshot, LineRange};
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 
 /// CLI サーバー識別用のアクセント色パレット（暗い背景でも視認しやすい色）
 const CLI_SERVER_COLORS: [egui::Color32; 6] = [
@@ -79,7 +79,7 @@ pub fn preview_pane(
     if !is_cli && state.preview_tab == PreviewTab::ExistingConfig {
         let (tab_actions, jumped_seq) = render_existing_config_pane(
             ui,
-            state.reveal_existing_secrets,
+            state,
             entry.existing_config.as_ref(),
             highlighted_server,
             pending_jump.map(|req| (req.server.as_str(), req.seq)),
@@ -190,7 +190,7 @@ pub fn preview_pane(
 /// 既存設定ファイルと登録済み MCP サーバー一覧の表示（ファイル系ターゲットのみ）
 fn render_existing_config_pane(
     ui: &mut egui::Ui,
-    reveal_existing_secrets: bool,
+    state: &AppState,
     existing: Option<&ExistingTargetState>,
     highlighted_server: Option<&str>,
     pending_jump: Option<(&str, u64)>,
@@ -206,7 +206,7 @@ fn render_existing_config_pane(
                     ))
                     .small(),
                 );
-                let mut reveal = reveal_existing_secrets;
+                let mut reveal = state.reveal_existing_secrets;
                 if ui
                     .checkbox(&mut reveal, "機密値（env / headers）を表示")
                     .changed()
@@ -224,22 +224,108 @@ fn render_existing_config_pane(
             } else {
                 ui.horizontal_wrapped(|ui| {
                     for name in &snapshot.server_names {
+                        let mut marked_delete = state.delete_selection.contains(name);
+                        if ui
+                            .checkbox(&mut marked_delete, "")
+                            .on_hover_text("削除対象として選択")
+                            .changed()
+                        {
+                            actions.push(UiAction::ToggleDeleteServer {
+                                server: name.clone(),
+                                selected: marked_delete,
+                            });
+                        }
                         let is_focused = highlighted_server == Some(name.as_str());
-                        let button = jump_badge_button(
-                            ui,
-                            "登録済",
-                            egui::Color32::LIGHT_BLUE,
-                            name,
-                            is_focused,
-                        );
+                        let (badge, color) = if marked_delete {
+                            ("削除予定", egui::Color32::LIGHT_RED)
+                        } else {
+                            ("登録済", egui::Color32::LIGHT_BLUE)
+                        };
+                        let button = jump_badge_button(ui, badge, color, name, is_focused);
                         if button
                             .on_hover_text("クリックして既存設定内の該当箇所へジャンプ")
                             .clicked()
                         {
                             actions.push(UiAction::JumpToPreviewServer(name.clone()));
                         }
+                        ui.add_space(4.0);
                     }
                 });
+
+                if !state.delete_selection.is_empty() {
+                    ui.add_space(4.0);
+                    ui.horizontal_wrapped(|ui| {
+                        let count = state.delete_selection.len();
+                        ui.label(
+                            egui::RichText::new(format!("削除対象: {count} 件"))
+                                .strong()
+                                .color(egui::Color32::LIGHT_RED),
+                        );
+                        if ui.button("削除を検証 (Dry-Run)").clicked() {
+                            actions.push(UiAction::DryRunDelete);
+                        }
+                        if ui
+                            .add(
+                                egui::Button::new(
+                                    egui::RichText::new(format!("選択した {count} 件を削除"))
+                                        .color(egui::Color32::WHITE),
+                                )
+                                .fill(egui::Color32::from_rgb(175, 45, 45)),
+                            )
+                            .on_hover_text(
+                                "選択した MCP サーバーを削除します（.bak バックアップを作成し、直前の取り消しで復元可能）",
+                            )
+                            .clicked()
+                        {
+                            actions.push(UiAction::ApplyDelete);
+                        }
+                        if ui.button("選択解除").clicked() {
+                            actions.push(UiAction::ClearDeleteSelection);
+                        }
+                        let mut show_after = state.show_delete_after_preview;
+                        if ui
+                            .checkbox(&mut show_after, "削除後の設定プレビューを表示")
+                            .changed()
+                        {
+                            actions.push(UiAction::SetShowDeleteAfterPreview(show_after));
+                        }
+                    });
+                }
+            }
+
+            if state.show_delete_after_preview && !state.delete_selection.is_empty() {
+                match &state.delete_preview {
+                    Some(Ok(plan)) => {
+                        let text = if state.reveal_existing_secrets {
+                            plan.raw_json.as_str()
+                        } else {
+                            plan.masked_json.as_str()
+                        };
+                        ui.label(
+                            egui::RichText::new(format!(
+                                "削除後の設定プレビュー（{} 件を削除予定）",
+                                plan.removed.len()
+                            ))
+                            .small()
+                            .color(egui::Color32::YELLOW),
+                        );
+                        egui::ScrollArea::vertical()
+                            .id_salt("delete_after_preview_scroll")
+                            .show(ui, |ui| {
+                                ui.add(
+                                    egui::TextEdit::multiline(&mut &*text)
+                                        .font(egui::TextStyle::Monospace)
+                                        .code_editor()
+                                        .desired_width(f32::INFINITY),
+                                );
+                            });
+                    }
+                    Some(Err(err)) => {
+                        ui.label(egui::RichText::new(err).color(egui::Color32::LIGHT_RED));
+                    }
+                    None => {}
+                }
+                return (actions, pending_jump.map(|(_, seq)| seq));
             }
 
             let mut jumped_seq = None;
@@ -249,7 +335,8 @@ fn render_existing_config_pane(
                     jumped_seq = render_existing_json_view(
                         ui,
                         snapshot,
-                        reveal_existing_secrets,
+                        state.reveal_existing_secrets,
+                        &state.delete_selection,
                         highlighted_server,
                         pending_jump,
                     );
@@ -284,6 +371,7 @@ fn render_existing_json_view(
     ui: &mut egui::Ui,
     snapshot: &ExistingConfigSnapshot,
     reveal_existing_secrets: bool,
+    delete_selection: &BTreeSet<String>,
     highlighted_server: Option<&str>,
     pending_jump: Option<(&str, u64)>,
 ) -> Option<u64> {
@@ -295,6 +383,7 @@ fn render_existing_json_view(
         let job = build_existing_config_layout_job(
             buf.as_str(),
             server_lines,
+            delete_selection,
             highlighted_server,
             font_id.clone(),
             default_color,
@@ -333,6 +422,7 @@ fn render_existing_json_view(
 fn build_existing_config_layout_job(
     text: &str,
     server_lines: &ServerLineRanges,
+    delete_selection: &BTreeSet<String>,
     highlighted_server: Option<&str>,
     font_id: egui::FontId,
     default_color: egui::Color32,
@@ -340,11 +430,33 @@ fn build_existing_config_layout_job(
 ) -> egui::text::LayoutJob {
     let mut job = egui::text::LayoutJob::default();
     job.wrap.max_width = wrap_width;
+
+    let line_count = text.split_inclusive('\n').count();
+    let mut delete_lines = vec![false; line_count];
+    for name in delete_selection {
+        if let Some(range) = server_lines.get(name) {
+            let end = range.end.min(line_count.saturating_sub(1));
+            for slot in delete_lines.iter_mut().take(end + 1).skip(range.start) {
+                *slot = true;
+            }
+        }
+    }
     let focused_range = highlighted_server.and_then(|name| server_lines.get(name).copied());
 
     for (line_idx, segment) in text.split_inclusive('\n').enumerate() {
         let is_focused = focused_range.is_some_and(|r| line_idx >= r.start && line_idx <= r.end);
-        let (color, background) = if is_focused {
+        let is_deleted = delete_lines.get(line_idx).copied().unwrap_or(false);
+        let (color, background) = if is_deleted {
+            (
+                egui::Color32::LIGHT_RED,
+                egui::Color32::from_rgba_unmultiplied(
+                    220,
+                    70,
+                    70,
+                    if is_focused { 60 } else { 32 },
+                ),
+            )
+        } else if is_focused {
             (
                 egui::Color32::LIGHT_BLUE,
                 egui::Color32::from_rgba_unmultiplied(120, 200, 255, 38),
