@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- `microsoft/winget-pkgs#464302` の先行更新にあわせ、`packaging/winget/manifests/s/scottlz0310/clp2cfg/0.1.0/` のマニフェストをスキーマ `1.28.0`（および `PrivacyUrl` 追加）へ更新し、`packaging/winget/README.md` の記述を同期
+
 ## [0.4.0] - 2026-11-19
 
 ### Added

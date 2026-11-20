@@ -9,13 +9,13 @@
 
 ## 1. winget-pkgs 審査で想定される論点と対応方針
 
-### 1.1 スキーマ `1.28.0` への更新要求と `Validation-Guide` ラベル
+### 1.1 スキーマ `1.28.0` への更新と `Validation-Guide` ラベル
 
-- **背景**: `0.1.0` の申請マニフェストは `ManifestVersion: 1.9.0` で作成されていますが、`microsoft/winget-pkgs` の定期バッチ検証やメンテナ確認により、非推奨スキーマとして最新版（`1.28.0`）への更新を求められる場合があります（`Validation-Guide` ラベルが付与されます）。
-- **注意点**: 一度 `Validation-Guide` ラベルが付くと、修正コミットを push して CI が通過してもラベルが自動解除されないケースがあります。更新後は PR に一言コメントを残し、再確認できる状態であることを明示します。
-- **更新時の変更点（`1.9.0` → `1.28.0`）**:
-  - 各 YAML 先頭の `# yaml-language-server: $schema=...` と末尾の `ManifestVersion` を `1.28.0` に更新する。
-  - `locale.en-US.yaml` に `PrivacyUrl: https://scottlz0310.github.io/clp2cfg/privacy-policy.html` を追加する。
+- **背景**: `0.1.0` の申請マニフェスト（[microsoft/winget-pkgs#464302](https://github.com/microsoft/winget-pkgs/pull/464302)）は当初 `ManifestVersion: 1.9.0` で提出されていましたが、`microsoft/winget-pkgs` 側の推奨スキーマが `1.28.0`（許容下限 `1.12.0`）へ移行したため、先行して `1.28.0` スキーマおよび `PrivacyUrl` へ更新済みです（コミット `ba8eb8b9c`）。
+- **注意点**: 万が一、過去状態へのバッチ検知等で `Validation-Guide` や `Manifest-Version-Deprecated` ラベルが付与された場合は、自動解除されないケースがあるため、既に `1.28.0` 適合済みである旨を PR にコメントして再確認を依頼します。
+- **適用済みの変更点（`1.9.0` → `1.28.0`）**:
+  - 各 YAML 先頭の `# yaml-language-server: $schema=...` と末尾の `ManifestVersion` を `1.28.0` に更新。
+  - `locale.en-US.yaml` に `PrivacyUrl: https://scottlz0310.github.io/clp2cfg/privacy-policy.html` を追加。
 
 `1.28.0` 更新後の報告コメント例:
 
