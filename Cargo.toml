@@ -10,7 +10,7 @@ repository = "https://github.com/scottlz0310/clp2cfg"
 # 依存の版はここで一元化する（Renovate の更新を 1 か所にまとめるため）
 [workspace.dependencies]
 arboard = "3.7.0"
-clap = { version = "4.6.7", features = ["derive"] }
+clap = { version = "4.6.8", features = ["derive"] }
 dirs = "7.0.0"
 eframe = { version = "0.37.0", features = ["persistence"] }
 egui = "0.37.0"
