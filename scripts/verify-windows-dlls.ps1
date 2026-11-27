@@ -21,6 +21,7 @@ $ErrorActionPreference = "Stop"
 # System32 存在チェックより先に明示的に拒否する。
 $script:ForbiddenRuntimePattern = '^(vcruntime|msvcp|msvcr\d|vccorlib|ucrtbase|concrt|vcomp|api-ms-win-crt-)'
 $script:CoreApiSetPattern = '^api-ms-win-core-'
+$script:SafeSystemDllNamePattern = '^[a-z0-9._-]+\.dll$'
 
 function Find-DumpbinPath {
   param(
@@ -100,7 +101,7 @@ function Get-DumpbinDependentDlls {
   foreach ($rawLine in $OutputLines) {
     $line = if ($null -eq $rawLine) { "" } else { $rawLine.TrimEnd() }
 
-    if ($line -match '^\s*Image has the following (?:delay load )?dependencies:\s*$') {
+    if ($line -match '^\s*Image has the following (?:[\w-]+\s+)*dependencies:\s*$') {
       $inSection = $true
       continue
     }
@@ -109,7 +110,7 @@ function Get-DumpbinDependentDlls {
       continue
     }
 
-    if ($line -match '^\s*Summary\s*$') {
+    if ($line -match '^\s{0,2}Summary\s*$') {
       $inSection = $false
       continue
     }
@@ -118,11 +119,13 @@ function Get-DumpbinDependentDlls {
       continue
     }
 
-    # セクション内のインデントされた DLL 行のみを対象とする
-    if ($line -match '^\s+([A-Za-z0-9._-]+\.dll)\s*$') {
+    # dumpbin /dependents の依存モジュール行（4 スペース以上またはタブのインデント）は
+    # 空白や特殊文字を含む外部 DLL 名を見落とさないようすべて取り込む。
+    # 認識済みセクション内のそれ以外の非空行は fail-closed でエラーにする。
+    if ($line -match '^(?:\t|\s{4,})(.+?)\s*$') {
       $dlls.Add($Matches[1].ToLowerInvariant())
     } else {
-      $inSection = $false
+      throw "dumpbin /dependents の依存セクション内で解釈できない行を検出しました: $line"
     }
   }
 
@@ -166,6 +169,11 @@ function Test-PortableDllDependencies {
   foreach ($dll in $normalized) {
     if ($dll -match $script:ForbiddenRuntimePattern) {
       $violations.Add("$dll (forbidden MSVC/UCRT runtime)")
+      continue
+    }
+
+    if (($dll -notmatch $script:SafeSystemDllNamePattern) -or $dll.Contains("..")) {
+      $violations.Add("$dll (non-system external DLL)")
       continue
     }
 

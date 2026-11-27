@@ -126,6 +126,80 @@ Assert-Condition -Name "非システム外部 DLL を拒否: libssl-3-x64.dll" `
   -Condition ((-not $thirdPartyRes.IsValid) -and ($thirdPartyRes.Violations.Count -eq 1) -and ($thirdPartyRes.Violations[0] -like "*non-system external DLL*")) `
   -Message "violations=$($thirdPartyRes.Violations -join '; ')"
 
+# 6. 正常行の後に空白を含む外部 DLL や後続行が並ぶ場合でも打ち切らず検証に失敗させる
+$spacedOutput = @(
+  "Dump of file app.exe",
+  "",
+  "File Type: EXECUTABLE IMAGE",
+  "",
+  "  Image has the following dependencies:",
+  "",
+  "    KERNEL32.dll",
+  "    Vendor Helper.dll",
+  "    VCRUNTIME140.dll",
+  "",
+  "  Image has the following delay load dependencies:",
+  "",
+  "    Another Helper.dll",
+  "",
+  "  Summary",
+  "",
+  "        1000 .data"
+)
+
+$spacedParsed = @(Get-DumpbinDependentDlls -OutputLines $spacedOutput)
+$expectedSpaced = @(
+  "another helper.dll",
+  "kernel32.dll",
+  "vcruntime140.dll",
+  "vendor helper.dll"
+)
+Assert-Condition -Name "正常行の後に空白を含む外部 DLL が並んでもセクションを打ち切らず全件抽出する" `
+  -Condition (($spacedParsed -join ",") -eq ($expectedSpaced -join ",")) `
+  -Message "actual=$($spacedParsed -join ',')"
+
+$spacedCheck = Test-PortableDllDependencies `
+  -DllNames $spacedParsed `
+  -System32Directory "C:\Windows\System32" `
+  -System32ExistsCheck $mockExists
+Assert-Condition -Name "空白を含む外部 DLL と後続の禁止ランタイムをすべて違反として検出する" `
+  -Condition (
+    (-not $spacedCheck.IsValid) -and
+    ($spacedCheck.Violations.Count -eq 3) -and
+    ($spacedCheck.Violations -contains "vendor helper.dll (non-system external DLL)") -and
+    ($spacedCheck.Violations -contains "another helper.dll (non-system external DLL)") -and
+    ($spacedCheck.Violations -contains "vcruntime140.dll (forbidden MSVC/UCRT runtime)")
+  ) `
+  -Message "violations=$($spacedCheck.Violations -join '; ')"
+
+# 7. パストラバーサルや非 DLL 名は System32 存在チェック結果に関わらず拒否する
+$unsafeNames = @("..\kernel32.dll", "sub\kernel32.dll", "custom module.ocx")
+foreach ($unsafeName in $unsafeNames) {
+  $unsafeRes = Test-PortableDllDependencies `
+    -DllNames @("kernel32.dll", $unsafeName) `
+    -System32Directory "C:\Windows\System32" `
+    -System32ExistsCheck { param($d) $true }
+  Assert-Condition -Name "不正なモジュール名を拒否: $unsafeName" `
+    -Condition ((-not $unsafeRes.IsValid) -and ($unsafeRes.Violations.Count -eq 1)) `
+    -Message "violations=$($unsafeRes.Violations -join '; ')"
+}
+
+# 8. 依存セクション内に解釈できない非インデント行が現れた場合は fail-closed で例外にする
+$unexpectedThrown = $false
+try {
+  $null = Get-DumpbinDependentDlls -OutputLines @(
+    "  Image has the following dependencies:",
+    "    KERNEL32.dll",
+    "  Unexpected Section Marker",
+    "  Summary"
+  )
+} catch {
+  $unexpectedThrown = $true
+}
+Assert-Condition -Name "依存セクション内の未知行は黙って打ち切らず例外を送出する" `
+  -Condition $unexpectedThrown `
+  -Message "thrown=$unexpectedThrown"
+
 Write-Host ""
 Write-Host "Summary: $passed passed, $failed failed"
 if ($failed -gt 0) {
