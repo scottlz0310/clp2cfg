@@ -3,19 +3,21 @@
 このドキュメントは、`scottlz0310.clp2cfg` を `microsoft/winget-pkgs` で審査通過・継続更新するための手順、トラブルシュート定型文、事前検証コマンド、および自動更新（[#38](https://github.com/scottlz0310/clp2cfg/issues/38)）の設計方針をまとめたものです。
 
 > [!IMPORTANT]
-> **現在の制約**: `packaging/winget/manifests/s/scottlz0310/clp2cfg/0.1.0/` および申請中の [microsoft/winget-pkgs#464302](https://github.com/microsoft/winget-pkgs/pull/464302) には、メンテナまたは検証パイプラインからの要求がない限り触れないでください。本ドキュメントの内容は、`#464302` に対するレビュー応答が必要になった場合、および `#464302` マージ後のバージョン更新・自動化作業に備えるためのものです。
+> **現在の制約**: `packaging/winget/manifests/s/scottlz0310/clp2cfg/0.4.1/` および申請中の [microsoft/winget-pkgs#464302](https://github.com/microsoft/winget-pkgs/pull/464302) には、メンテナまたは検証パイプラインからの要求がない限りむやみに再変更しないでください。本ドキュメントの内容は、`#464302` に対するレビュー応答が必要になった場合、および `#464302` マージ後のバージョン更新・自動化作業（[#38](https://github.com/scottlz0310/clp2cfg/issues/38)）に備えるためのものです。
 
 ---
 
 ## 1. winget-pkgs 審査で想定される論点と対応方針
 
-### 1.1 スキーマ `1.28.0` への更新と `Validation-Guide` ラベル
+### 1.1 スキーマ `1.28.0`・`v0.4.1` 引き上げと `Validation-Guide` ラベル
 
-- **背景**: `0.1.0` の申請マニフェスト（[microsoft/winget-pkgs#464302](https://github.com/microsoft/winget-pkgs/pull/464302)）は当初 `ManifestVersion: 1.9.0` で提出されていましたが、`microsoft/winget-pkgs` 側の推奨スキーマが `1.28.0`（許容下限 `1.12.0`）へ移行したため、先行して `1.28.0` スキーマおよび `PrivacyUrl` へ更新済みです（コミット `ba8eb8b9c`）。
+- **背景**: 申請中の [microsoft/winget-pkgs#464302](https://github.com/microsoft/winget-pkgs/pull/464302) は当初 `0.1.0`（`ManifestVersion: 1.9.0`）で提出されていましたが、① `1.28.0` スキーマおよび `PrivacyUrl` への先行対応（コミット `ba8eb8b9c`）に続き、② `#120`（`+crt-static` による VC++ ランタイム非依存化）および `#122`（クリーン Windows Sandbox `<vGPU>Disable</vGPU>` での DX12 WARP 自動フォールバック実測）を反映した `v0.4.1`（デュアルバイナリ構成: `clp2cfg` / `clp2cfg-cli`）へ引き上げ済みです（コミット `10f22463f`、[#125](https://github.com/scottlz0310/clp2cfg/issues/125)）。
 - **注意点**: 万が一、過去状態へのバッチ検知等で `Validation-Guide` や `Manifest-Version-Deprecated` ラベルが付与された場合は、自動解除されないケースがあるため、既に `1.28.0` 適合済みである旨を PR にコメントして再確認を依頼します。
-- **適用済みの変更点（`1.9.0` → `1.28.0`）**:
-  - 各 YAML 先頭の `# yaml-language-server: $schema=...` と末尾の `ManifestVersion` を `1.28.0` に更新。
-  - `locale.en-US.yaml` に `PrivacyUrl: https://scottlz0310.github.io/clp2cfg/privacy-policy.html` を追加。
+- **適用済みの変更点（`0.1.0` → `0.4.1`）**:
+  - `0.1.0/` を削除し、`0.4.1/` 単一構成へ置換（`1 PR = 1 バージョン`）。
+  - 各 YAML 先頭の `# yaml-language-server: $schema=...` と末尾の `ManifestVersion` を `1.28.0` で維持し、`locale.en-US.yaml` に `PrivacyUrl: https://scottlz0310.github.io/clp2cfg/privacy-policy.html` を設定。
+  - `NestedInstallerFiles` / `Commands` に `clp2cfg` と `clp2cfg-cli` の両方を登録（Scoop 版と統一）。
+  - PR タイトルを `New package: scottlz0310.clp2cfg version 0.4.1` へ更新し、PR 本文へ公開 CI 来歴・未署名＋Defender 実測・Windows Sandbox `<vGPU>Disable</vGPU>` 検証結果・GUI / CLI の引数なし挙動を先回り記載。
 
 `1.28.0` 更新後の報告コメント例:
 
@@ -44,9 +46,9 @@ Note on the `DisplayVersion` warning: `DisplayVersion` is not specified in any o
   - ファイル系ターゲット（Claude Code / Desktop、Cursor、VS Code Copilot、Project Local `.mcp.json`、Windsurf、Cline、Roo Code、Zed）への適用では、ローカル設定ファイルへ `.bak` バックアップ付きで書き込みます。
   - ユーザーが CLI 委譲ターゲット（`claude-cli` / `codex-cli` / `copilot-cli` / `antigravity-cli`）を明示選択して適用したときのみ、ローカルにインストールされた公式 CLI（`claude` / `codex` / `copilot` / `agy`）をサブプロセスとして実行します。この経路は `clp2cfg` によるファイル直接書き込み・`.bak` バックアップは通らず、委譲先の外部 CLI 自体が行う通信やデータ処理には各ツール提供元のプライバシーポリシーが適用されます。
   - 上記の挙動は [プライバシーポリシー](https://scottlz0310.github.io/clp2cfg/privacy-policy.html)（正本: [`docs/privacy-policy.md`](../../docs/privacy-policy.md)）およびマニフェストの説明文と一致しています。
-- **PE バージョンリソースの補足**:
-  - `v0.1.0` の `clp2cfg.exe` には PE の `FileVersion` / `ProductVersion` が未埋め込みです。
-  - `v0.3.3` の `clp2cfg.exe` には `0.3.3` が埋め込まれています（`clp2cfg-cli.exe` は workspace 分割の既知制約により未埋め込み）。
+- **PE バージョンリソース・ランタイム依存の補足**:
+  - `v0.1.0` の `clp2cfg.exe` には PE の `FileVersion` / `ProductVersion` が未埋め込みで、VC++ ランタイム（`VCRUNTIME140.dll`）動的依存がありました。
+  - `v0.4.1` 以降は `.cargo/config.toml` で `+crt-static` を有効化しており、`clp2cfg.exe` / `clp2cfg-cli.exe` ともに OS 標準 DLL のみに依存します（VC++ 再頒布可能パッケージ不要）。`clp2cfg.exe` には `FileVersion` / `ProductVersion` (`0.4.1`) が埋め込まれています（`clp2cfg-cli.exe` は workspace 分割の既知制約により未埋め込み）。
 
 PR 本文・コメントに添える未署名＋スキャン報告例:
 
@@ -58,13 +60,13 @@ PR 本文・コメントに添える未署名＋スキャン報告例:
 
 ---
 
-## 2. ローカル事前検証手順（`0.1.0` を変更しない検証）
+## 2. ローカル事前検証手順（リポジトリ外の一時ディレクトリでの検証）
 
 公開済みリリース ZIP の SHA-256 照合・未署名確認・Windows Defender スキャン・`1.28.0` マニフェストのローカル検証は、リポジトリ外の一時ディレクトリで実行できます。
 
 ```powershell
-# 例: v0.3.3 を一時ディレクトリへ取得して照合・スキャンする
-$tag = "v0.3.3"
+# 例: v0.4.1 を一時ディレクトリへ取得して照合・スキャンする
+$tag = "v0.4.1"
 $ver = $tag.TrimStart("v")
 $tmp = Join-Path $env:TEMP "clp2cfg-winget-verify-$ver"
 New-Item -ItemType Directory -Force -Path $tmp | Out-Null
@@ -96,9 +98,9 @@ winget validate --manifest <path-to-manifest-dir>
 
 ---
 
-## 3. 実測エビデンス（2026-11-17 確認済み）
+## 3. 実測エビデンス
 
-以下は GitHub Releases の公開済みアセットをローカル環境で取得し、実測した記録です（`winget` `v1.29.380` / `wingetcreate` `1.28.1.0` / Windows Defender Engine `1.1.26100.4`・定義 `1.463.339.0`）。
+以下は GitHub Releases の公開済みアセットを取得し、実測した記録です。`v0.1.0` / `v0.3.3` は 2026-11-17 にローカル環境（`winget` `v1.29.380` / `wingetcreate` `1.28.1.0` / Windows Defender Engine `1.1.26100.4`・定義 `1.463.339.0`）で、`v0.4.1` は 2026-11-28 に確認しました。
 
 ### 3.1 公開アセットのハッシュ・署名・Defender スキャン結果
 
@@ -109,14 +111,17 @@ winget validate --manifest <path-to-manifest-dir>
 | `v0.3.3` | `clp2cfg-x86_64-pc-windows-msvc.zip` |      7,630,254 | `f9feb76c8e82fd0df64614f43640a9fd02a57d5b5bc35aa700c6bf22a29e0e53` | -                            | -                 | `found no threats.`                        |
 | `v0.3.3` | `clp2cfg.exe`                        |     17,545,728 | `39ac65b87777f250e63d048004f4f73c3ca7efd261e168e42495282bc8f6e319` | `0.3.3` / `0.3.3`            | 未署名            | `found no threats.`                        |
 | `v0.3.3` | `clp2cfg-cli.exe`                    |      1,256,448 | `dc73c1b5821e0bcc81d0ba69d043ee88b7b9b7fcd9c377df61150df8c86d9770` | 未埋め込み（既知）           | 未署名            | `found no threats.`                        |
+| `v0.4.1` | `clp2cfg-x86_64-pc-windows-msvc.zip` |      7,872,038 | `7dbc9175651a97373ee1a1ea7ba9fcb467ba113a0dcbeb24b7cc30444766a819` | -                            | -                 | `found no threats.`                        |
+| `v0.4.1` | `clp2cfg.exe`                        |     17,912,832 | `d6ee6b1f95959852bbee83873a47aee0240942d5a02f1acdb7b67694626640dc` | `0.4.1` / `0.4.1`            | 未署名            | `found no threats.`                        |
+| `v0.4.1` | `clp2cfg-cli.exe`                    |      1,417,216 | `630f767530fef2873503c76ab4bd3f3df86ca597e32edfb66ef0b119b91ec544` | 未埋め込み（既知）           | 未署名            | `found no threats.`                        |
 
-### 3.2 動作・外部通信なし・`1.28.0` スキーマ検証結果
+### 3.2 動作・外部通信なし・`1.28.0` スキーマ・Windows Sandbox 実機検証結果
 
-- **GUI 起動・無通信確認**: `v0.1.0`（3 秒間起動）および `v0.3.3`（2 秒間起動）の `clp2cfg.exe` について、プロセス起動中の TCP 接続 `0` 件・UDP エンドポイント `0` 件を確認。`crates/` 配下に `std::net` / `TcpStream` / `UdpSocket` / HTTP クライアントクレートの使用もありません。
-- **CLI / サイレント実行確認（`v0.3.3`）**: `clp2cfg-cli.exe --version`（`clp2cfg 0.3.3`）、`clp2cfg-cli.exe --dry-run <json> --target project`（終了コード `0`）、`clp2cfg.exe --dry-run <json> --target project`（終了コード `0`）を確認。
-- **`1.28.0` スキーマ検証（`winget validate` `v1.29.380`）**: 一時ディレクトリに `v0.3.3` + `ManifestVersion: 1.28.0` + `PrivacyUrl: https://scottlz0310.github.io/clp2cfg/privacy-policy.html` のマニフェストを作成し、以下の両構成で `マニフェストの検証は成功しました。`（終了コード `0`）を確認済みです。
-  - 単一バイナリ構成: `NestedInstallerFiles` に `clp2cfg.exe` のみ
-  - デュアルバイナリ構成: `NestedInstallerFiles` に `clp2cfg.exe`（`PortableCommandAlias: clp2cfg`）と `clp2cfg-cli.exe`（`PortableCommandAlias: clp2cfg-cli`）、`Commands` に `clp2cfg` と `clp2cfg-cli`
+- **GUI 起動・無通信確認**: `v0.1.0`（3 秒間起動）、`v0.3.3`（2 秒間起動）、`v0.4.1`（10 秒間起動、16 回採取）の `clp2cfg.exe` について、プロセス起動中の TCP 接続 `0` 件・UDP エンドポイント `0` 件を確認。`crates/` 配下に `std::net` / `TcpStream` / `UdpSocket` / HTTP クライアントクレートの使用もありません。
+- **クリーン Windows Sandbox 実機検証（2026-11-28、`v0.4.1`、Windows 11 Build 26100、`<vGPU>Disable</vGPU>`）**:
+  - `C:\Windows\System32\VCRUNTIME140.dll` / `VCRUNTIME140_1.dll` 未導入・物理 GPU 非露出（`Microsoft Remote Display Adapter` のみ）の環境で、`clp2cfg.exe` が OpenGL 1.1 を安全にスキップし DirectX 12 WARP（`Microsoft Basic Render Driver`）へ自動フォールバックして正常描画・正常終了することを確認（`#120` / `#122` 実測完了）。
+  - `winget validate`（`v1.30.310`）成功、`winget-verify-gate` 統合検証 `passed: true`（`17 pass / 0 fail / 3 warn`、`PKG-PORT-01` / `PKG-PORT-05` / `NG-03` / `PKG-INST-01` / `PKG-INST-03` / `APP-CLI-02` すべて `pass`）。
+  - `winget install --manifest` 成功（`clp2cfg` / `clp2cfg-cli` 両エイリアス登録、`clp2cfg --version` / `clp2cfg-cli --version` = `clp2cfg 0.4.1`）、`winget uninstall --manifest` 成功および ARP 残骸 `0` 件を確認。
 
 ---
 
@@ -129,10 +134,10 @@ winget validate --manifest <path-to-manifest-dir>
 2. **配布アセットの正規表現（`.zip` 明示）**
    - `clp2cfg` の Windows 配布物は `.exe` 単体ではなく `clp2cfg-x86_64-pc-windows-msvc.zip` である。
    - `vedantmgoyal9/winget-releaser` の既定 `installers-regex`（`\.(exe|msi|msix|appx)(bundle){0,1}$`）では `.zip` が一致しないため、採用する場合は `installers-regex: 'x86_64-pc-windows-msvc\.zip$'` の指定が必須となる。
-3. **`clp2cfg-cli.exe` の同梱方針**
-   - `v0.2.0` 以降のリリース ZIP には `clp2cfg.exe` と `clp2cfg-cli.exe` の両方が含まれているが、`0.1.0` マニフェストの `NestedInstallerFiles` には `clp2cfg.exe` のみ記載されている。
-   - `wingetcreate update` や `komac update` は既存マニフェストの `NestedInstallerFiles` を引き継ぐため、`#464302` マージ後の初回バージョン更新時に `NestedInstallerFiles` / `Commands` へ `clp2cfg-cli.exe` を追加し（あわせて `1.28.0` と `PrivacyUrl` を反映し、ルート `README.md` の注記を更新する）、以後の自動更新で同構造を引き継ぐ。
+3. **`clp2cfg-cli.exe` 同梱構造の引き継ぎ**
+   - `#464302` の `0.4.1` 引き上げ時点で、すでに `NestedInstallerFiles` / `Commands` へ `clp2cfg.exe`（`clp2cfg`）と `clp2cfg-cli.exe`（`clp2cfg-cli`）のデュアルバイナリ構成・`1.28.0` スキーマ・`PrivacyUrl` を反映済みである。
+   - `wingetcreate update` や `komac update` は既存マニフェストの構造を引き継ぐため、`#464302` マージ後はそのまま継続更新できる。
 4. **自動更新ツールの選定と PR 本文方針**
    - **`vedantmgoyal9/winget-releaser`（内部で `komac` を実行）**: フォーク同期や複数バージョンの保持上限管理に優れ、ワークフロー記述が簡潔。一方で `winget-pkgs` に 1 バージョン以上登録済みでないとエラー終了し、また PR 本文を直接カスタマイズする入力がないため、未署名バイナリや Defender スキャン結果の注記を PR 本文へ載せたい場合は後続ステップで PR 本文を追記する構成が必要。
    - **`wingetcreate update`**: 公式ツールであり `-o` でローカル生成してチェック・加工しやすい一方、フォーク同期や PR 作成処理を自前で組む必要がある。
-   - **推奨進め方**: `#464302` マージ直後の初回アップデート（`0.1.0` → 最新安定版、`1.28.0` / `PrivacyUrl` / `clp2cfg-cli` 反映）はローカル生成＋検証のうえ手動 PR で構造を確定させ、その後 Issue `#38` で `winget-releaser`（`installers-regex` 指定＋必要に応じ PR 本文追記）または `komac` ベースのワークフローを `release.yml`（または専用ワークフロー）へ組み込む。
+   - **推奨進め方**: `#464302` マージ後、Issue `#38` で `winget-releaser`（`installers-regex` 指定＋必要に応じ PR 本文追記）または `komac` ベースのワークフローを `release.yml`（または専用ワークフロー）へ組み込む。

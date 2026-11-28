@@ -137,7 +137,7 @@ cargo test --workspace
 | `clp2cfg`     | GUI 版。`INPUT` を渡すと GUI にスニペットを流し込んでプレビューまで表示します。`--apply` / `--dry-run` を付けると、ウィンドウを出さずにサイレントで実行し、**終了コードだけ**を返します（出力はありません） |
 | `clp2cfg-cli` | コンソール版。常にヘッドレスで、結果を標準出力・標準エラーに出力し、終了コードを返します。スクリプトで結果を使う場合はこちらを使います                                                                      |
 
-> `clp2cfg-cli` は ZIP（`clp2cfg-cli.exe`）と `cargo install --git https://github.com/scottlz0310/clp2cfg clp2cfg-cli` で入手できます。Scoop / winget への対応は、リリース作業とあわせて後日行います。
+> `clp2cfg-cli` は Scoop（`clp2cfg` パッケージに同梱）、ZIP（`clp2cfg-cli.exe`）、`cargo install --git https://github.com/scottlz0310/clp2cfg clp2cfg-cli` で入手できます。winget は登録申請中のマニフェストに同梱しており、審査・マージ完了後に利用できます。
 
 ```sh
 # クリップボードの内容を、既存の設定ファイルすべてに適用（GUI 版でもサイレントに実行）
