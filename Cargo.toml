@@ -12,7 +12,9 @@ repository = "https://github.com/scottlz0310/clp2cfg"
 arboard = "3.7.0"
 clap = { version = "4.6.9", features = ["derive"] }
 dirs = "7.0.0"
-eframe = { version = "0.37.0", features = ["persistence"] }
+# クリーン Windows 環境（OpenGL 1.1 のみ）でも DirectX 12 WARP へフォールバックできるよう
+# wgpu バックエンドを明示して維持する（eframe 0.37 既定だが将来の既定変更を防ぐ）。
+eframe = { version = "0.37.0", features = ["persistence", "wgpu"] }
 egui = "0.37.0"
 image = { version = "0.25.10", default-features = false, features = ["png", "ico"] }
 json5 = "1.3.8"
