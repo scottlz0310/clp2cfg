@@ -10,7 +10,7 @@ repository = "https://github.com/scottlz0310/clp2cfg"
 # 依存の版はここで一元化する（Renovate の更新を 1 か所にまとめるため）
 [workspace.dependencies]
 arboard = "3.7.0"
-clap = { version = "4.6.9", features = ["derive"] }
+clap = { version = "4.6.10", features = ["derive"] }
 dirs = "7.0.0"
 # クリーン Windows 環境（OpenGL 1.1 のみ）でも DirectX 12 WARP へフォールバックできるよう
 # wgpu バックエンドを明示して維持する（eframe 0.37 既定だが将来の既定変更を防ぐ）。
