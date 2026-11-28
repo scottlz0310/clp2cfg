@@ -64,6 +64,17 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
+      - name: Windows DLL 検証スクリプトのテスト
+        shell: pwsh
+        run: pwsh -NoProfile -File scripts/test-verify-windows-dlls.ps1
+
+      - name: リリースバイナリをビルド
+        run: cargo build --release --locked --workspace --bins
+
+      - name: PE インポート DLL ホワイトリストを検証
+        shell: pwsh
+        run: pwsh -NoProfile -File scripts/verify-windows-dlls.ps1 target/release/clp2cfg.exe target/release/clp2cfg-cli.exe
+
   coverage:
     name: Coverage
     needs: rust

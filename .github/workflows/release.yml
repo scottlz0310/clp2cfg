@@ -7,8 +7,10 @@ on:
     branches: [main]
   pull_request:
     paths:
+      - .cargo/config.toml
       - .github/workflows/release.yml
       - scripts/attach-release-assets.sh
+      - scripts/verify-windows-dlls.ps1
       - Cargo.toml
       - crates/*/Cargo.toml
       - crates/*/build.rs
@@ -98,6 +100,38 @@ jobs:
               exit 1
             }
           done
+
+      - name: Verify Windows PE DLL dependencies
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          ARCHIVE: ${{ steps.archive.outputs.zip }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $extractDir = Join-Path $env:RUNNER_TEMP "verify-dlls"
+          if (Test-Path -LiteralPath $extractDir) {
+            Remove-Item -LiteralPath $extractDir -Recurse -Force
+          }
+          try {
+            Expand-Archive -LiteralPath $env:ARCHIVE -DestinationPath $extractDir -Force
+            $requiredBins = @("clp2cfg.exe", "clp2cfg-cli.exe")
+            $resolvedBins = @()
+            foreach ($name in $requiredBins) {
+              $found = @(Get-ChildItem -LiteralPath $extractDir -Filter $name -Recurse -File)
+              if ($found.Count -ne 1) {
+                throw "Expected exactly 1 $name in archive, found $($found.Count)"
+              }
+              $resolvedBins += $found[0].FullName
+            }
+            & pwsh -NoProfile -File scripts/verify-windows-dlls.ps1 @resolvedBins
+            if ($LASTEXITCODE -ne 0) {
+              exit $LASTEXITCODE
+            }
+          } finally {
+            if (Test-Path -LiteralPath $extractDir) {
+              Remove-Item -LiteralPath $extractDir -Recurse -Force
+            }
+          }
 
       - name: Write checksum
         shell: bash

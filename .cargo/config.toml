@@ -1,3 +1,8 @@
 # 公開から 3 日未満のクレートを解決しない。Rust 1.100 以降で有効（それ未満では無視される）。
 [registry]
 global-min-publish-age = "3 days"
+
+# Windows リリースバイナリから MSVC C ランタイム（VCRUNTIME140.dll 等）への動的依存をなくし、
+# VC++ 再頒布可能パッケージ未導入のクリーンな Windows 環境でも単体動作できるようにする。
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
