@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- クリーンな Windows 環境（OpenGL 1.1 のみ）でも DirectX 12 WARP ソフトウェアレンダラへフォールバックできる構成を維持するため、ルート `Cargo.toml` の `eframe` 依存に `wgpu` feature を明示し、DX12 WARP（`Microsoft Basic Render Driver`）での `egui_wgpu::RenderState` 初期化回帰テストを追加（#122）
 - Windows 向けビルド（`x86_64-pc-windows-msvc`）に `.cargo/config.toml` で `target-feature=+crt-static` を設定し、`clp2cfg.exe` / `clp2cfg-cli.exe` から MSVC C ランタイム（`VCRUNTIME140.dll` や `api-ms-win-crt-*.dll`）への動的依存を解消。あわせて `dumpbin /dependents` による PE インポート DLL ホワイトリスト検証スクリプト（`scripts/verify-windows-dlls.ps1`）とテストを追加し、CI / リリースワークフローへ組み込み（#120）
 - `microsoft/winget-pkgs#464302` の先行更新にあわせ、`packaging/winget/manifests/s/scottlz0310/clp2cfg/0.1.0/` のマニフェストをスキーマ `1.28.0`（および `PrivacyUrl` 追加）へ更新し、`packaging/winget/README.md` の記述を同期
 
