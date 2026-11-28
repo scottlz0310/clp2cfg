@@ -10,9 +10,7 @@ use std::sync::Arc;
 use std::task::{Context, Poll, Wake, Waker};
 use std::thread::{self, Thread};
 
-use eframe::egui_wgpu::{
-    self, wgpu, RendererOptions, WgpuConfiguration, WgpuSetup, WgpuSetupCreateNew,
-};
+use eframe::egui_wgpu::{self, wgpu, RendererOptions, WgpuSetup};
 
 struct ThreadWaker(Thread);
 
@@ -47,27 +45,34 @@ fn is_dx12_warp(info: &wgpu::AdapterInfo) -> bool {
 
 #[test]
 fn test_wgpu_default_backends_expose_dx12_warp_fallback() {
-    let mut setup = WgpuSetupCreateNew::without_display_handle();
-    // 外部の WGPU_BACKEND 環境変数に左右されず、eframe 既定の PRIMARY | GL 構成を検証する。
-    setup.instance_descriptor.backends = wgpu::Backends::PRIMARY | wgpu::Backends::GL;
+    let WgpuSetup::CreateNew(setup) = eframe::NativeOptions::default().wgpu_options.wgpu_setup
+    else {
+        panic!("NativeOptions::default() の wgpu_setup は CreateNew であること");
+    };
+
+    let backends = setup.instance_descriptor.backends;
+    assert!(
+        backends.contains(wgpu::Backends::DX12),
+        "NativeOptions::default() の既定バックエンドに DX12 が含まれること: {backends:?}"
+    );
 
     let adapters = block_on(async {
         let instance = WgpuSetup::CreateNew(setup).new_instance().await;
-        instance
-            .enumerate_adapters(wgpu::Backends::PRIMARY | wgpu::Backends::GL)
-            .await
+        instance.enumerate_adapters(backends).await
     });
 
     assert!(
         adapters.iter().any(|a| is_dx12_warp(&a.get_info())),
-        "既定バックエンド（PRIMARY | GL）に DX12 WARP フォールバックが含まれること"
+        "NativeOptions::default() の既定バックエンドに DX12 WARP フォールバックが含まれること"
     );
 }
 
 #[test]
 fn test_wgpu_dx12_warp_software_renderer_initializes() {
-    let mut setup = WgpuSetupCreateNew::without_display_handle();
-    setup.instance_descriptor.backends = wgpu::Backends::DX12;
+    let mut wgpu_options = eframe::NativeOptions::default().wgpu_options;
+    let WgpuSetup::CreateNew(ref mut setup) = wgpu_options.wgpu_setup else {
+        panic!("NativeOptions::default() の wgpu_setup は CreateNew であること");
+    };
     setup.native_adapter_selector = Some(Arc::new(|adapters, compatible_surface| {
         adapters
             .iter()
@@ -80,14 +85,10 @@ fn test_wgpu_dx12_warp_software_renderer_initializes() {
             .ok_or_else(|| "DX12 WARP adapter not found".to_owned())
     }));
 
-    let config = WgpuConfiguration {
-        wgpu_setup: WgpuSetup::CreateNew(setup),
-        ..Default::default()
-    };
-
     let render_state = block_on(async {
-        let instance = config.wgpu_setup.new_instance().await;
-        egui_wgpu::RenderState::create(&config, &instance, None, RendererOptions::default()).await
+        let instance = wgpu_options.wgpu_setup.new_instance().await;
+        egui_wgpu::RenderState::create(&wgpu_options, &instance, None, RendererOptions::default())
+            .await
     })
     .expect("DX12 WARP (Microsoft Basic Render Driver) で RenderState を初期化できること");
 
