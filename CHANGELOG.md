@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- `microsoft/winget-pkgs#464302` の `v0.4.1`（`+crt-static`・`wgpu` WARP 実測済み・`clp2cfg` / `clp2cfg-cli` デュアルバイナリ構成）への引き上げにあわせ、`packaging/winget/manifests/s/scottlz0310/clp2cfg/` を `0.1.0` から `0.4.1` へ更新し、`packaging/winget/README.md` に `v0.4.1` 実測・Windows Sandbox 検証結果を反映し、ルート `README.md` の `clp2cfg-cli` 入手方法の記述を更新（#125）
+
 ## [0.4.1] - 2026-11-28
 
 ### Changed
